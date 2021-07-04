@@ -57,49 +57,72 @@ fn main() -> ! {
 			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w.gint().clear_bit());
 			dp.OTG_FS_GLOBAL.gusbcfg.write(|w| w.physel().set_bit());
 
-
-			writeln!(tx, "waiting for AHBIDL").ok();
-			while !dp.OTG_FS_GLOBAL.grstctl.read().ahbidl().bit() {}
-
-			
+		/*	
 			writeln!(tx, "resetting").ok();
 			dp.OTG_FS_GLOBAL.grstctl.write(|w| w.csrst().set_bit());
 			while dp.OTG_FS_GLOBAL.grstctl.read().csrst().bit() {}
 			writeln!(tx, "reset done").ok();
 			delay.delay_ms(1_u32); // FIXME wait 3 PHY clocks
+			*/
 			
 
+			writeln!(tx, "waiting for AHBIDL").ok();
+			while !dp.OTG_FS_GLOBAL.grstctl.read().ahbidl().bit() {}
 			
-			delay.delay_ms(50_u32);
 			dp.OTG_FS_GLOBAL.gccfg.write(|w| w
 				.vbusasen().set_bit()
-				.vbusbsen().set_bit()
+				//.vbusbsen().set_bit()
 				.pwrdwn().set_bit()
 			);
 			dp.OTG_FS_GLOBAL.gccfg.modify(|r, w| w.bits( r.bits() | (1<<21) )); // NOVBUSSENS
-			
+
+			delay.delay_ms(250_u32);
+			// FIXME rmeove these 2
+			dp.OTG_FS_HOST.hcfg.write(|w| w.fslspcs().bits(1)); // 48MHz
+			//dp.OTG_FS_HOST.hcfg.modify(|r, w| w.bits( r.bits() | (1<<2) )); // FSLSS
+
+
+
+
+			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w // TODO: the C code doesn't do this here
+				.gint().set_bit()
+			);
+			dp.OTG_FS_GLOBAL.gintmsk.write(|w| w // FIXME FIXME FIXME the C code has them all zero
+				.otgint().set_bit()
+				.mmism().set_bit()
+				.sofm().set_bit()
+//				.prtim().set_bit() // FIXME: "only accessible in host mode", why is this inaccessible then?!
+			);
+			dp.OTG_FS_GLOBAL.gintmsk.modify(|r, w| w.bits( r.bits() | (1<<24) )); // PRTIM
+
 
 			delay.delay_ms(50_u32);
 
 			dp.OTG_FS_GLOBAL.gusbcfg.write(|w| w
-				//.hnpcap().clear_bit()
-				//.srpcap().clear_bit()
+				.hnpcap().clear_bit()
+				.srpcap().clear_bit()
 				//.trdt().bits(0xF) // FIXME can/should be smaller
 				//.tocal().bits(8) // FIXME same
-				//.fdmod().clear_bit() // must wait for 25ms before the change takes effect
+				.fdmod().clear_bit() // must wait for 25ms before the change takes effect
 				.fhmod().set_bit() // must wait for 25ms before the change takes effect
 			);
-			delay.delay_ms(200_u32);
 
-			// PCTCCTL = 0
+			
+			delay.delay_ms(250_u32);
+
+			writeln!(tx, "PCGCCTL = {:08x}", dp.OTG_FS_PWRCLK.pcgcctl.read().bits());
+			dp.OTG_FS_PWRCLK.pcgcctl.write(|w| w.bits(0));
+
 
 			dp.OTG_FS_HOST.hcfg.write(|w| w.fslspcs().bits(1)); // 48MHz
+			dp.OTG_FS_HOST.hcfg.modify(|r, w| w.bits( r.bits() | (1<<2) )); // FSLSS
 
-			writeln!(tx, "resetting the port");
+			// TODO maybe remove that reset
 			dp.OTG_FS_HOST.hprt.write(|w| w.prst().set_bit());
-			delay.delay_ms(12_u32);
+			delay.delay_ms(15_u32);
 			dp.OTG_FS_HOST.hprt.write(|w| w.prst().clear_bit());
-			delay.delay_ms(12_u32);
+			delay.delay_ms(15_u32);
+
 
 
 			dp.OTG_FS_GLOBAL.grxfsiz.write(|w| w
@@ -114,11 +137,79 @@ fn main() -> ! {
 				.ptxsa().bits(64+64)
 			);
 
+
+
+			dp.OTG_FS_GLOBAL.gintmsk.write(|w| w.bits(0));
+			dp.OTG_FS_GLOBAL.gintsts.write(|w| w.bits(!0));
+
 			writeln!(tx, "setting PPWR and waiting for PCDET");
 			dp.OTG_FS_HOST.hprt.write(|w| w.ppwr().set_bit()); // FIXME unsure if that's needed
+			
+			delay.delay_ms(200_u32); // FIXME
+			
+			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w.gint().set_bit());
+
+
+			writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
 			writeln!(tx, "{}", dp.OTG_FS_HOST.hprt.read().bits());
 			while !dp.OTG_FS_HOST.hprt.read().pcdet().bit() {}
 			writeln!(tx, "got PCDET!");
+			writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
+
+			delay.delay_ms(10_u32);
+
+			dp.OTG_FS_HOST.hprt.write(|w| w.ppwr().set_bit()); // FIXME unsure if that's needed
+			delay.delay_ms(200_u32);
+			writeln!(tx, "resetting the port and waiting for PENCHNG");
+			//dp.OTG_FS_HOST.hprt.modify(|r,w| w.bits( r.bits() | (1<<8)));
+			dp.OTG_FS_HOST.hprt.modify(|_,w| w.prst().set_bit());
+			delay.delay_ms(15_u32);
+			//dp.OTG_FS_HOST.hprt.modify(|r,w| w.bits( r.bits() & !(1<<8)));
+			dp.OTG_FS_HOST.hprt.modify(|_,w| w.prst().clear_bit());
+			delay.delay_ms(15_u32);
+
+			while !dp.OTG_FS_HOST.hprt.read().penchng().bit() {
+				writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
+				delay.delay_ms(100_u32);
+				//writeln!(tx, "{}, {}", dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
+				//dp.OTG_FS_GLOBAL.gintsts.modify(|r,w| w.bits(r.bits()));
+			}
+
+			//delay.delay_ms(12_u32);
+
+			writeln!(tx, "enumerated speed is {}", dp.OTG_FS_HOST.hprt.read().pspd().bits());
+
+			// HFIR?
+			// FSLSPCS and reset?
+
+
+			writeln!(tx, "gintsts = {:08x}", dp.OTG_FS_GLOBAL.gintsts.read().bits());
+			writeln!(tx, "hprt = {:08x}", dp.OTG_FS_HOST.hprt.read().bits());
+			delay.delay_ms(300_u32);
+			writeln!(tx, "hprt = {:08x}", dp.OTG_FS_HOST.hprt.read().bits());
+			loop {
+				if dp.OTG_FS_GLOBAL.gintsts.read().sof().bit() {
+					dp.OTG_FS_GLOBAL.gintsts.write(|w| w.sof().set_bit());
+					writeln!(tx, "sof");
+				}
+				if dp.OTG_FS_GLOBAL.gintsts.read().otgint().bit() {
+					let val = dp.OTG_FS_GLOBAL.gotgint.read().bits();
+					writeln!(tx, "otg {:08x}", val);
+					dp.OTG_FS_GLOBAL.gotgint.write(|w| w.bits(val));
+				}
+				if dp.OTG_FS_GLOBAL.gintsts.read().hprtint().bit() {
+					let val = dp.OTG_FS_HOST.hprt.read().bits();
+					writeln!(tx, "hprt {:08x}", val);
+					dp.OTG_FS_HOST.hprt.modify(|r,w| w.bits( r.bits() | 4 ));
+					//dp.OTG_FS_HOST.hprt.write(|w| w.bits((val & 0x22)|4));
+				}
+				if dp.OTG_FS_GLOBAL.gintsts.read().discint().bit() {
+					dp.OTG_FS_GLOBAL.gintsts.write(|w| w.discint().set_bit());
+					writeln!(tx, "discint");
+					let val = dp.OTG_FS_HOST.hprt.read().bits();
+					writeln!(tx, "hprt {:08x}", val);
+				}
+			}
 
 
 			// --------
@@ -130,11 +221,6 @@ fn main() -> ! {
 
 
 
-			dp.OTG_FS_GLOBAL.gintmsk.write(|w| w // FIXME FIXME FIXME the C code has them all zero
-				.otgint().set_bit()
-				.mmism().set_bit()
-//				.prtim().set_bit() // FIXME: "only accessible in host mode", why is this inaccessible then?!
-			);
 			// TODO program FSLSS to 1 on devices that support it
 
 			delay.delay_ms(100_u32);
