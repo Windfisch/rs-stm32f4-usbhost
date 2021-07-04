@@ -51,53 +51,30 @@ fn main() -> ! {
 
 
 		unsafe {
+			// enable OTG clock
 			let rcc = &(*crate::stm32::RCC::ptr());
 			rcc.ahb2enr.modify(|_,w| { w.otgfsen().set_bit() } );
 
-			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w.gint().clear_bit());
-			dp.OTG_FS_GLOBAL.gusbcfg.write(|w| w.physel().set_bit());
-
-		/*	
+			/*
+			// soft reset
 			writeln!(tx, "resetting").ok();
 			dp.OTG_FS_GLOBAL.grstctl.write(|w| w.csrst().set_bit());
 			while dp.OTG_FS_GLOBAL.grstctl.read().csrst().bit() {}
 			writeln!(tx, "reset done").ok();
-			delay.delay_ms(1_u32); // FIXME wait 3 PHY clocks
-			*/
-			
+			delay.delay_ms(1_u32); // wait at least 3 PHY clocks
 
+			// wait for AHB idle (docs for CSRST require this)
 			writeln!(tx, "waiting for AHBIDL").ok();
 			while !dp.OTG_FS_GLOBAL.grstctl.read().ahbidl().bit() {}
-			
-			dp.OTG_FS_GLOBAL.gccfg.write(|w| w
-				.vbusasen().set_bit()
-				//.vbusbsen().set_bit()
-				.pwrdwn().set_bit()
-			);
-			dp.OTG_FS_GLOBAL.gccfg.modify(|r, w| w.bits( r.bits() | (1<<21) )); // NOVBUSSENS
-
-			delay.delay_ms(250_u32);
-			// FIXME rmeove these 2
-			dp.OTG_FS_HOST.hcfg.write(|w| w.fslspcs().bits(1)); // 48MHz
-			//dp.OTG_FS_HOST.hcfg.modify(|r, w| w.bits( r.bits() | (1<<2) )); // FSLSS
+			*/
 
 
+			// "Core initialization" step 1
+			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w.gint().set_bit());
+			// FIXME rxflvl, txfifo empty level
+			//dp.OTG_FS_GLOBAL.gusbcfg.write(|w| w.physel().set_bit()); // this bit is always 1
 
-
-			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w // TODO: the C code doesn't do this here
-				.gint().set_bit()
-			);
-			dp.OTG_FS_GLOBAL.gintmsk.write(|w| w // FIXME FIXME FIXME the C code has them all zero
-				.otgint().set_bit()
-				.mmism().set_bit()
-				.sofm().set_bit()
-//				.prtim().set_bit() // FIXME: "only accessible in host mode", why is this inaccessible then?!
-			);
-			dp.OTG_FS_GLOBAL.gintmsk.modify(|r, w| w.bits( r.bits() | (1<<24) )); // PRTIM
-
-
-			delay.delay_ms(50_u32);
-
+			// "Core initialization" step 2
 			dp.OTG_FS_GLOBAL.gusbcfg.write(|w| w
 				.hnpcap().clear_bit()
 				.srpcap().clear_bit()
@@ -106,25 +83,66 @@ fn main() -> ! {
 				.fdmod().clear_bit() // must wait for 25ms before the change takes effect
 				.fhmod().set_bit() // must wait for 25ms before the change takes effect
 			);
+		
+			/*
+			// configure vbus sensing
+			dp.OTG_FS_GLOBAL.gccfg.modify(|_, w| w
+				.vbusasen().set_bit()
+				//.vbusbsen().set_bit()
+				.pwrdwn().set_bit()
+			);
+			dp.OTG_FS_GLOBAL.gccfg.modify(|r, w| w.bits( r.bits() | (1<<21) )); // NOVBUSSENS
+			*/
 
-			
-			delay.delay_ms(250_u32);
+			// "Core initialization" step 3
+			dp.OTG_FS_GLOBAL.gintmsk.write(|w| w // FIXME FIXME FIXME the C code has them all zero
+				.otgint().set_bit()
+				.mmism().set_bit()
+				.sofm().set_bit()
+//				.prtim().set_bit() // FIXME: "only accessible in host mode", why is this inaccessible then?!
+			);
+			// "Host initialization" step 1
+			dp.OTG_FS_GLOBAL.gintmsk.modify(|r, w| w.bits( r.bits() | (1<<24) )); // PRTIM
 
-			writeln!(tx, "PCGCCTL = {:08x}", dp.OTG_FS_PWRCLK.pcgcctl.read().bits());
-			dp.OTG_FS_PWRCLK.pcgcctl.write(|w| w.bits(0));
 
-
+			// "Host initialization" step 2
 			dp.OTG_FS_HOST.hcfg.write(|w| w.fslspcs().bits(1)); // 48MHz
 			dp.OTG_FS_HOST.hcfg.modify(|r, w| w.bits( r.bits() | (1<<2) )); // FSLSS
-
-			// TODO maybe remove that reset
-			dp.OTG_FS_HOST.hprt.write(|w| w.prst().set_bit());
+			
+			
+			// "Host initialization" steps 3-4: enable PPWR and wait for PCDET
+			writeln!(tx, "setting PPWR and waiting for PCDET");
+			dp.OTG_FS_HOST.hprt.write(|w| w.ppwr().set_bit()); // FIXME unsure if that's needed
+			
+			writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
+			writeln!(tx, "{}", dp.OTG_FS_HOST.hprt.read().bits());
+			while !dp.OTG_FS_HOST.hprt.read().pcdet().bit() {}
+			writeln!(tx, "got PCDET!");
+			writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
+			
+			// "Host initialization" steps 5-9
+			writeln!(tx, "resetting the port and waiting for PENCHNG");
+			dp.OTG_FS_HOST.hprt.modify(|_,w| w.prst().set_bit());
 			delay.delay_ms(15_u32);
-			dp.OTG_FS_HOST.hprt.write(|w| w.prst().clear_bit());
+			dp.OTG_FS_HOST.hprt.modify(|_,w| w.prst().clear_bit());
 			delay.delay_ms(15_u32);
 
+			while !dp.OTG_FS_HOST.hprt.read().penchng().bit() {
+				writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
+				delay.delay_ms(100_u32);
+				//writeln!(tx, "{}, {}", dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
+				//dp.OTG_FS_GLOBAL.gintsts.modify(|r,w| w.bits(r.bits()));
+			}
+			writeln!(tx, "enumerated speed is {}", dp.OTG_FS_HOST.hprt.read().pspd().bits());
+			
+			// "Host initialization" step 10: program hfir
+			// TODO: is that needed? seems to autoselect a good value
 
+			// "Host initialization" step 11: set PHY clock
+			// TODO: is that needed? we already set 1 = 48MHz here. reset port if changed.
+			//dp.OTG_FS_HOST.hcfg.write(|w| w.fslspcs().bits(1)); // 48MHz
 
+			// "Host initialization" steps 12-14
 			dp.OTG_FS_GLOBAL.grxfsiz.write(|w| w
 				.rxfd().bits(64) // 64 32bit words RX fifo size
 			);
@@ -137,50 +155,14 @@ fn main() -> ! {
 				.ptxsa().bits(64+64)
 			);
 
+			// ---- done ----
 
+
+
+			delay.delay_ms(250_u32);
 
 			dp.OTG_FS_GLOBAL.gintmsk.write(|w| w.bits(0));
 			dp.OTG_FS_GLOBAL.gintsts.write(|w| w.bits(!0));
-
-			writeln!(tx, "setting PPWR and waiting for PCDET");
-			dp.OTG_FS_HOST.hprt.write(|w| w.ppwr().set_bit()); // FIXME unsure if that's needed
-			
-			delay.delay_ms(200_u32); // FIXME
-			
-			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w.gint().set_bit());
-
-
-			writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
-			writeln!(tx, "{}", dp.OTG_FS_HOST.hprt.read().bits());
-			while !dp.OTG_FS_HOST.hprt.read().pcdet().bit() {}
-			writeln!(tx, "got PCDET!");
-			writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
-
-			delay.delay_ms(10_u32);
-
-			dp.OTG_FS_HOST.hprt.write(|w| w.ppwr().set_bit()); // FIXME unsure if that's needed
-			delay.delay_ms(200_u32);
-			writeln!(tx, "resetting the port and waiting for PENCHNG");
-			//dp.OTG_FS_HOST.hprt.modify(|r,w| w.bits( r.bits() | (1<<8)));
-			dp.OTG_FS_HOST.hprt.modify(|_,w| w.prst().set_bit());
-			delay.delay_ms(15_u32);
-			//dp.OTG_FS_HOST.hprt.modify(|r,w| w.bits( r.bits() & !(1<<8)));
-			dp.OTG_FS_HOST.hprt.modify(|_,w| w.prst().clear_bit());
-			delay.delay_ms(15_u32);
-
-			while !dp.OTG_FS_HOST.hprt.read().penchng().bit() {
-				writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
-				delay.delay_ms(100_u32);
-				//writeln!(tx, "{}, {}", dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
-				//dp.OTG_FS_GLOBAL.gintsts.modify(|r,w| w.bits(r.bits()));
-			}
-
-			//delay.delay_ms(12_u32);
-
-			writeln!(tx, "enumerated speed is {}", dp.OTG_FS_HOST.hprt.read().pspd().bits());
-
-			// HFIR?
-			// FSLSPCS and reset?
 
 
 			writeln!(tx, "gintsts = {:08x}", dp.OTG_FS_GLOBAL.gintsts.read().bits());
