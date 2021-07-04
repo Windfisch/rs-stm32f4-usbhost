@@ -265,47 +265,6 @@ fn main() -> ! {
 
 				delay.delay_ms(1_u32);
 			}
-
-
-			// --------
-			if false {
-			delay.delay_ms(25_u32);
-
-
-
-
-
-
-			// TODO program FSLSS to 1 on devices that support it
-
-			delay.delay_ms(100_u32);
-			while !dp.OTG_FS_HOST.hprt.read().penchng().bit() {
-				writeln!(tx, "{}, {}", dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
-				dp.OTG_FS_GLOBAL.gintsts.modify(|r,w| w.bits(r.bits()));
-			}
-			dp.OTG_FS_GLOBAL.gahbcfg.modify(|_,w| w // TODO: the C code does this at the end
-				.gint().set_bit()
-				.ptxfelvl().clear_bit()
-			);
-			//dp.OTG_FS_GLOBAL.gintsts.modify(|_,w| w.rxflvl().set_bit()); FIXME p763, 1.
-			writeln!(tx, "done");
-
-			let speed = dp.OTG_FS_HOST.hprt.read().pspd().bits();
-			writeln!(tx, "speed = {}", speed);
-
-			// FIXME: 10. Program the HFIR register with a value corresponding to the selected PHY clock 1
-
-			// TODO: do we need a port reset?
-			}
-		}
-		writeln!(tx, "all done :)");
-
-		loop {
-			// On for 1s, off for 1s.
-			led.set_high().unwrap();
-			delay.delay_ms(1000_u32);
-			led.set_low().unwrap();
-			delay.delay_ms(1000_u32);
 		}
 	}
 
