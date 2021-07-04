@@ -12,8 +12,6 @@ use core::fmt::Write;
 
 use crate::hal::{prelude::*, stm32};
 
-struct fnord { foo: u32 }
-
 #[entry]
 fn main() -> ! {
 	if let (Some(dp), Some(cp)) = (
@@ -58,7 +56,7 @@ fn main() -> ! {
 			/*
 			// soft reset
 			writeln!(tx, "resetting").ok();
-			dp.OTG_FS_GLOBAL.grstctl.write(|w| w.csrst().set_bit());
+			dp.OTG_FS_GLOBAL.grstctl.modify(|_,w| w.csrst().set_bit());
 			while dp.OTG_FS_GLOBAL.grstctl.read().csrst().bit() {}
 			writeln!(tx, "reset done").ok();
 			delay.delay_ms(1_u32); // wait at least 3 PHY clocks
@@ -70,12 +68,12 @@ fn main() -> ! {
 
 
 			// "Core initialization" step 1
-			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w.gint().set_bit());
+			dp.OTG_FS_GLOBAL.gahbcfg.modify(|_,w| w.gint().set_bit());
 			// FIXME rxflvl, txfifo empty level
-			//dp.OTG_FS_GLOBAL.gusbcfg.write(|w| w.physel().set_bit()); // this bit is always 1
+			//dp.OTG_FS_GLOBAL.gusbcfg.modify(|_,w| w.physel().set_bit()); // this bit is always 1
 
 			// "Core initialization" step 2
-			dp.OTG_FS_GLOBAL.gusbcfg.write(|w| w
+			dp.OTG_FS_GLOBAL.gusbcfg.modify(|_,w| w
 				.hnpcap().clear_bit()
 				.srpcap().clear_bit()
 				//.trdt().bits(0xF) // FIXME can/should be smaller
@@ -95,7 +93,7 @@ fn main() -> ! {
 			*/
 
 			// "Core initialization" step 3
-			dp.OTG_FS_GLOBAL.gintmsk.write(|w| w // FIXME FIXME FIXME the C code has them all zero
+			dp.OTG_FS_GLOBAL.gintmsk.modify(|_,w| w // FIXME FIXME FIXME the C code has them all zero
 				.otgint().set_bit()
 				.mmism().set_bit()
 				.sofm().set_bit()
@@ -106,19 +104,15 @@ fn main() -> ! {
 
 
 			// "Host initialization" step 2
-			dp.OTG_FS_HOST.hcfg.write(|w| w.fslspcs().bits(1)); // 48MHz
+			dp.OTG_FS_HOST.hcfg.modify(|_,w| w.fslspcs().bits(1)); // 48MHz
 			dp.OTG_FS_HOST.hcfg.modify(|r, w| w.bits( r.bits() | (1<<2) )); // FSLSS
 			
 			
 			// "Host initialization" steps 3-4: enable PPWR and wait for PCDET
 			writeln!(tx, "setting PPWR and waiting for PCDET");
-			dp.OTG_FS_HOST.hprt.write(|w| w.ppwr().set_bit()); // FIXME unsure if that's needed
-			
-			writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
-			writeln!(tx, "{}", dp.OTG_FS_HOST.hprt.read().bits());
+			dp.OTG_FS_HOST.hprt.modify(|_,w| w.ppwr().set_bit()); // FIXME unsure if that's needed
 			while !dp.OTG_FS_HOST.hprt.read().pcdet().bit() {}
 			writeln!(tx, "got PCDET!");
-			writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
 			
 			// "Host initialization" steps 5-9
 			writeln!(tx, "resetting the port and waiting for PENCHNG");
@@ -128,9 +122,7 @@ fn main() -> ! {
 			delay.delay_ms(15_u32);
 
 			while !dp.OTG_FS_HOST.hprt.read().penchng().bit() {
-				writeln!(tx, "> {}, {:08x}, {:08x}", dp.OTG_FS_HOST.hprt.read().ppwr().bit(), dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
 				delay.delay_ms(100_u32);
-				//writeln!(tx, "{}, {}", dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
 				//dp.OTG_FS_GLOBAL.gintsts.modify(|r,w| w.bits(r.bits()));
 			}
 			writeln!(tx, "enumerated speed is {}", dp.OTG_FS_HOST.hprt.read().pspd().bits());
@@ -140,57 +132,138 @@ fn main() -> ! {
 
 			// "Host initialization" step 11: set PHY clock
 			// TODO: is that needed? we already set 1 = 48MHz here. reset port if changed.
-			//dp.OTG_FS_HOST.hcfg.write(|w| w.fslspcs().bits(1)); // 48MHz
+			//dp.OTG_FS_HOST.hcfg.modify(|_,w| w.fslspcs().bits(1)); // 48MHz
 
 			// "Host initialization" steps 12-14
-			dp.OTG_FS_GLOBAL.grxfsiz.write(|w| w
+			dp.OTG_FS_GLOBAL.grxfsiz.modify(|_,w| w
 				.rxfd().bits(64) // 64 32bit words RX fifo size
 			);
-			dp.OTG_FS_GLOBAL.hnptxfsiz_mut().write(|w| w
+			dp.OTG_FS_GLOBAL.hnptxfsiz_mut().modify(|_,w| w
 				.nptxfd().bits(64)
 				.nptxfsa().bits(64)
 			);
-			dp.OTG_FS_GLOBAL.hptxfsiz.write(|w| w
+			dp.OTG_FS_GLOBAL.hptxfsiz.modify(|_,w| w
 				.ptxfsiz().bits(64)
 				.ptxsa().bits(64+64)
 			);
 
 			// ---- done ----
+			dp.OTG_FS_GLOBAL.gintmsk.modify(|_,w| w.hcim().set_bit());
+			// TODO maybe unmask NPTXFEM or so
+
+			const N_CHANNELS: u32 = 8;
+			dp.OTG_FS_HOST.haintmsk.write(|w| w.bits( (1<<N_CHANNELS)-1 ));
+
+			macro_rules! hcint {
+				($HCINT:ident, $HCINTMSK:ident) => {
+						dp.OTG_FS_HOST.$HCINTMSK.write(|w| w
+							.xfrcm().set_bit()
+							.chhm().set_bit()
+							.stallm().set_bit()
+							.nakm().set_bit()
+							.ackm().set_bit()
+							.txerrm().set_bit()
+							.bberrm().set_bit()
+							.frmorm().set_bit()
+							.dterrm().set_bit()
+						);
+						dp.OTG_FS_HOST.$HCINT.modify(|r,w| w.bits(r.bits()));
+				}
+			}
+			hcint!(hcint0, hcintmsk0);
+			hcint!(hcint1, hcintmsk1);
+			hcint!(hcint2, hcintmsk2);
+			hcint!(hcint3, hcintmsk3);
+			hcint!(hcint4, hcintmsk4);
+			hcint!(hcint5, hcintmsk5);
+			hcint!(hcint6, hcintmsk6);
+			hcint!(hcint7, hcintmsk7);
+
+
+
+
+			// "host programming model"/"channel initialization"
 
 
 
 			delay.delay_ms(250_u32);
 
-			dp.OTG_FS_GLOBAL.gintmsk.write(|w| w.bits(0));
-			dp.OTG_FS_GLOBAL.gintsts.write(|w| w.bits(!0));
+			dp.OTG_FS_GLOBAL.gintmsk.modify(|_,w| w.bits(0));
+			dp.OTG_FS_GLOBAL.gintsts.modify(|_,w| w.bits(!0));
 
 
 			writeln!(tx, "gintsts = {:08x}", dp.OTG_FS_GLOBAL.gintsts.read().bits());
 			writeln!(tx, "hprt = {:08x}", dp.OTG_FS_HOST.hprt.read().bits());
 			delay.delay_ms(300_u32);
 			writeln!(tx, "hprt = {:08x}", dp.OTG_FS_HOST.hprt.read().bits());
+			let mut sofcount: u32 = 0;
 			loop {
 				if dp.OTG_FS_GLOBAL.gintsts.read().sof().bit() {
 					dp.OTG_FS_GLOBAL.gintsts.write(|w| w.sof().set_bit());
-					writeln!(tx, "sof");
+					write!(tx, "{:8}\x08\x08\x08\x08\x08\x08\x08\x08", sofcount);
+					sofcount += 1;
 				}
+
+				while dp.OTG_FS_GLOBAL.gintsts.read().rxflvl().bit() {
+					writeln!(tx, "read");
+					// TODO do things
+				}
+
+				// OTGINT
 				if dp.OTG_FS_GLOBAL.gintsts.read().otgint().bit() {
 					let val = dp.OTG_FS_GLOBAL.gotgint.read().bits();
 					writeln!(tx, "otg {:08x}", val);
-					dp.OTG_FS_GLOBAL.gotgint.write(|w| w.bits(val));
+					dp.OTG_FS_GLOBAL.gotgint.modify(|_,w| w.bits(val));
 				}
+
+				// HPRTINT
 				if dp.OTG_FS_GLOBAL.gintsts.read().hprtint().bit() {
-					let val = dp.OTG_FS_HOST.hprt.read().bits();
-					writeln!(tx, "hprt {:08x}", val);
-					dp.OTG_FS_HOST.hprt.modify(|r,w| w.bits( r.bits() | 4 ));
-					//dp.OTG_FS_HOST.hprt.write(|w| w.bits((val & 0x22)|4));
+					let val = dp.OTG_FS_HOST.hprt.read();
+					writeln!(tx, "hprt {:08x}", val.bits());
+
+					if val.penchng().bit() {
+						writeln!(tx, "penchng, port enabled is {}", val.pena().bit());
+					}
+
+					if val.pocchng().bit() {
+						writeln!(tx, "overcurrent");
+					}
+
+					if val.pcdet().bit() {
+						writeln!(tx, "port connect detected (pcdet)");
+					}
+			
+					writeln!(tx, "hprt before {:08x}", val.bits());
+					dp.OTG_FS_HOST.hprt.modify(|r,w| w.bits(r.bits() & !4)); // do not set PENA???
+					writeln!(tx, "hprt after {:08x}", val.bits());
 				}
+
+				// DISCINT
 				if dp.OTG_FS_GLOBAL.gintsts.read().discint().bit() {
 					dp.OTG_FS_GLOBAL.gintsts.write(|w| w.discint().set_bit());
-					writeln!(tx, "discint");
-					let val = dp.OTG_FS_HOST.hprt.read().bits();
-					writeln!(tx, "hprt {:08x}", val);
+					writeln!(tx, "disconnect (discint)");
 				}
+
+				// MMIS
+				if dp.OTG_FS_GLOBAL.gintsts.read().mmis().bit() {
+					dp.OTG_FS_GLOBAL.gintsts.write(|w| w.mmis().set_bit());
+					writeln!(tx, "mode mismatch (mmis)");
+				}
+
+				// IPXFR
+				if dp.OTG_FS_GLOBAL.gintsts.read().ipxfr_incompisoout().bit(){
+					dp.OTG_FS_GLOBAL.gintsts.write(|w| w.ipxfr_incompisoout().set_bit());
+					writeln!(tx, "ipxfr");
+				}
+
+				// HCINT
+				if dp.OTG_FS_GLOBAL.gintsts.read().hcint().bit() {
+					writeln!(tx, "hcint");
+
+					// TODO
+				}
+
+				delay.delay_ms(1_u32);
 			}
 
 
@@ -210,11 +283,11 @@ fn main() -> ! {
 				writeln!(tx, "{}, {}", dp.OTG_FS_HOST.hprt.read().bits(), dp.OTG_FS_GLOBAL.gintsts.read().bits());
 				dp.OTG_FS_GLOBAL.gintsts.modify(|r,w| w.bits(r.bits()));
 			}
-			dp.OTG_FS_GLOBAL.gahbcfg.write(|w| w // TODO: the C code does this at the end
+			dp.OTG_FS_GLOBAL.gahbcfg.modify(|_,w| w // TODO: the C code does this at the end
 				.gint().set_bit()
 				.ptxfelvl().clear_bit()
 			);
-			//dp.OTG_FS_GLOBAL.gintsts.write(|w| w.rxflvl().set_bit()); FIXME p763, 1.
+			//dp.OTG_FS_GLOBAL.gintsts.modify(|_,w| w.rxflvl().set_bit()); FIXME p763, 1.
 			writeln!(tx, "done");
 
 			let speed = dp.OTG_FS_HOST.hprt.read().pspd().bits();
