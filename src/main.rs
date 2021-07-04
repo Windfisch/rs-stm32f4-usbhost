@@ -1,6 +1,8 @@
+#![feature(generators, generator_trait)]
 #![no_main]
 #![no_std]
 
+use core::ops::Generator;
 // Halt on panic
 use panic_halt as _; // panic handler
 
@@ -11,6 +13,12 @@ use crate::hal::serial;
 use core::fmt::Write;
 
 use crate::hal::{prelude::*, stm32};
+
+#[derive(Debug)]
+enum UsbLoop {
+	Connected,
+	Disconnected
+}
 
 #[entry]
 fn main() -> ! {
@@ -48,7 +56,12 @@ fn main() -> ! {
 		writeln!(tx, "hello world!").ok();
 
 
-		unsafe {
+		let otg_fs_global = dp.OTG_FS_GLOBAL;
+		let otg_fs_host = dp.OTG_FS_HOST;
+
+		let mut tx2 = unsafe { core::ptr::read(&tx) };
+
+		let mut statemachine = || { unsafe {
 			// enable OTG clock
 			let rcc = &(*crate::stm32::RCC::ptr());
 			rcc.ahb2enr.modify(|_,w| { w.otgfsen().set_bit() } );
@@ -56,24 +69,23 @@ fn main() -> ! {
 			/*
 			// soft reset
 			writeln!(tx, "resetting").ok();
-			dp.OTG_FS_GLOBAL.grstctl.modify(|_,w| w.csrst().set_bit());
-			while dp.OTG_FS_GLOBAL.grstctl.read().csrst().bit() {}
+			otg_fs_global.grstctl.modify(|_,w| w.csrst().set_bit());
+			while otg_fs_global.grstctl.read().csrst().bit() { yield None; }
 			writeln!(tx, "reset done").ok();
 			delay.delay_ms(1_u32); // wait at least 3 PHY clocks
 
 			// wait for AHB idle (docs for CSRST require this)
 			writeln!(tx, "waiting for AHBIDL").ok();
-			while !dp.OTG_FS_GLOBAL.grstctl.read().ahbidl().bit() {}
+			while !otg_fs_global.grstctl.read().ahbidl().bit() { yield None; }
 			*/
 
-
 			// "Core initialization" step 1
-			dp.OTG_FS_GLOBAL.gahbcfg.modify(|_,w| w.gint().set_bit());
+			otg_fs_global.gahbcfg.modify(|_,w| w.gint().set_bit());
 			// FIXME rxflvl, txfifo empty level
-			//dp.OTG_FS_GLOBAL.gusbcfg.modify(|_,w| w.physel().set_bit()); // this bit is always 1
+			//otg_fs_global.gusbcfg.modify(|_,w| w.physel().set_bit()); // this bit is always 1
 
 			// "Core initialization" step 2
-			dp.OTG_FS_GLOBAL.gusbcfg.modify(|_,w| w
+			otg_fs_global.gusbcfg.modify(|_,w| w
 				.hnpcap().clear_bit()
 				.srpcap().clear_bit()
 				//.trdt().bits(0xF) // FIXME can/should be smaller
@@ -84,80 +96,77 @@ fn main() -> ! {
 		
 			/*
 			// configure vbus sensing
-			dp.OTG_FS_GLOBAL.gccfg.modify(|_, w| w
+			otg_fs_global.gccfg.modify(|_, w| w
 				.vbusasen().set_bit()
 				//.vbusbsen().set_bit()
 				.pwrdwn().set_bit()
 			);
-			dp.OTG_FS_GLOBAL.gccfg.modify(|r, w| w.bits( r.bits() | (1<<21) )); // NOVBUSSENS
+			otg_fs_global.gccfg.modify(|r, w| w.bits( r.bits() | (1<<21) )); // NOVBUSSENS
 			*/
 
 			// "Core initialization" step 3
-			dp.OTG_FS_GLOBAL.gintmsk.modify(|_,w| w // FIXME FIXME FIXME the C code has them all zero
+			otg_fs_global.gintmsk.modify(|_,w| w // FIXME FIXME FIXME the C code has them all zero
 				.otgint().set_bit()
 				.mmism().set_bit()
 				.sofm().set_bit()
 //				.prtim().set_bit() // FIXME: "only accessible in host mode", why is this inaccessible then?!
 			);
 			// "Host initialization" step 1
-			dp.OTG_FS_GLOBAL.gintmsk.modify(|r, w| w.bits( r.bits() | (1<<24) )); // PRTIM
+			otg_fs_global.gintmsk.modify(|r, w| w.bits( r.bits() | (1<<24) )); // PRTIM
 
 
 			// "Host initialization" step 2
-			dp.OTG_FS_HOST.hcfg.modify(|_,w| w.fslspcs().bits(1)); // 48MHz
-			dp.OTG_FS_HOST.hcfg.modify(|r, w| w.bits( r.bits() | (1<<2) )); // FSLSS
+			otg_fs_host.hcfg.modify(|_,w| w.fslspcs().bits(1)); // 48MHz
+			otg_fs_host.hcfg.modify(|r, w| w.bits( r.bits() | (1<<2) )); // FSLSS
 			
 			
 			loop {
 				// "Host initialization" steps 3-4: enable PPWR and wait for PCDET
-				writeln!(tx, "setting PPWR and waiting for PCDET");
-				dp.OTG_FS_HOST.hprt.modify(|_,w| w.ppwr().set_bit()); // FIXME unsure if that's needed
-				while !dp.OTG_FS_HOST.hprt.read().pcdet().bit() {}
-				writeln!(tx, "got PCDET!");
+				writeln!(tx, "setting PPWR and waiting for PCDET").ok();
+				otg_fs_host.hprt.modify(|_,w| w.ppwr().set_bit()); // FIXME unsure if that's needed
+				while !otg_fs_host.hprt.read().pcdet().bit() { yield None; }
+				writeln!(tx, "got PCDET!").ok();
 				
 				// "Host initialization" steps 5-9
-				writeln!(tx, "resetting the port and waiting for PENCHNG");
-				dp.OTG_FS_HOST.hprt.modify(|_,w| w.prst().set_bit());
+				writeln!(tx, "resetting the port and waiting for PENCHNG").ok();
+				otg_fs_host.hprt.modify(|_,w| w.prst().set_bit());
 				delay.delay_ms(15_u32);
-				dp.OTG_FS_HOST.hprt.modify(|_,w| w.prst().clear_bit());
+				otg_fs_host.hprt.modify(|_,w| w.prst().clear_bit());
 				delay.delay_ms(15_u32);
 
-				while !dp.OTG_FS_HOST.hprt.read().penchng().bit() {
-					delay.delay_ms(100_u32);
-					//dp.OTG_FS_GLOBAL.gintsts.modify(|r,w| w.bits(r.bits()));
-				}
-				writeln!(tx, "enumerated speed is {}", dp.OTG_FS_HOST.hprt.read().pspd().bits());
+				while !otg_fs_host.hprt.read().penchng().bit() { yield None; }
+				writeln!(tx, "enumerated speed is {}", otg_fs_host.hprt.read().pspd().bits()).ok();
 				
 				// "Host initialization" step 10: program hfir
 				// TODO: is that needed? seems to autoselect a good value
 
 				// "Host initialization" step 11: set PHY clock
 				// TODO: is that needed? we already set 1 = 48MHz here. reset port if changed.
-				//dp.OTG_FS_HOST.hcfg.modify(|_,w| w.fslspcs().bits(1)); // 48MHz
+				//otg_fs_host.hcfg.modify(|_,w| w.fslspcs().bits(1)); // 48MHz
 
 				// "Host initialization" steps 12-14
-				dp.OTG_FS_GLOBAL.grxfsiz.modify(|_,w| w
+				otg_fs_global.grxfsiz.modify(|_,w| w
 					.rxfd().bits(64) // 64 32bit words RX fifo size
 				);
-				dp.OTG_FS_GLOBAL.hnptxfsiz_mut().modify(|_,w| w
+				otg_fs_global.hnptxfsiz_mut().modify(|_,w| w
 					.nptxfd().bits(64)
 					.nptxfsa().bits(64)
 				);
-				dp.OTG_FS_GLOBAL.hptxfsiz.modify(|_,w| w
+				otg_fs_global.hptxfsiz.modify(|_,w| w
 					.ptxfsiz().bits(64)
 					.ptxsa().bits(64+64)
 				);
 
 				// ---- done ----
-				dp.OTG_FS_GLOBAL.gintmsk.modify(|_,w| w.hcim().set_bit());
+				otg_fs_global.gintmsk.modify(|_,w| w.hcim().set_bit());
 				// TODO maybe unmask NPTXFEM or so
 
 				const N_CHANNELS: u32 = 8;
-				dp.OTG_FS_HOST.haintmsk.write(|w| w.bits( (1<<N_CHANNELS)-1 ));
+				otg_fs_host.haintmsk.write(|w| w.bits( (1<<N_CHANNELS)-1 ));
 
 				macro_rules! hcint {
 					($HCINT:ident, $HCINTMSK:ident) => {
-							dp.OTG_FS_HOST.$HCINTMSK.write(|w| w
+							otg_fs_host.$HCINTMSK.write(|w| w
 								.xfrcm().set_bit()
 								.chhm().set_bit()
 								.stallm().set_bit()
@@ -168,7 +177,7 @@ fn main() -> ! {
 								.frmorm().set_bit()
 								.dterrm().set_bit()
 							);
-							dp.OTG_FS_HOST.$HCINT.modify(|r,w| w.bits(r.bits()));
+							otg_fs_host.$HCINT.modify(|r,w| w.bits(r.bits()));
 					}
 				}
 				hcint!(hcint0, hcintmsk0);
@@ -189,86 +198,100 @@ fn main() -> ! {
 
 				delay.delay_ms(250_u32);
 
-				dp.OTG_FS_GLOBAL.gintmsk.modify(|_,w| w.bits(0));
-				dp.OTG_FS_GLOBAL.gintsts.modify(|_,w| w.bits(!0));
+				otg_fs_global.gintmsk.modify(|_,w| w.bits(0));
+				otg_fs_global.gintsts.modify(|_,w| w.bits(!0));
 
 
-				writeln!(tx, "gintsts = {:08x}", dp.OTG_FS_GLOBAL.gintsts.read().bits());
-				writeln!(tx, "hprt = {:08x}", dp.OTG_FS_HOST.hprt.read().bits());
+				writeln!(tx, "gintsts = {:08x}", otg_fs_global.gintsts.read().bits()).ok();
+				writeln!(tx, "hprt = {:08x}", otg_fs_host.hprt.read().bits()).ok();
 				delay.delay_ms(300_u32);
-				writeln!(tx, "hprt = {:08x}", dp.OTG_FS_HOST.hprt.read().bits());
+				writeln!(tx, "hprt = {:08x}", otg_fs_host.hprt.read().bits()).ok();
 				let mut sofcount: u32 = 0;
+
+				yield Some(UsbLoop::Connected);
+
 				loop {
-					if dp.OTG_FS_GLOBAL.gintsts.read().sof().bit() {
-						dp.OTG_FS_GLOBAL.gintsts.write(|w| w.sof().set_bit());
+					if otg_fs_global.gintsts.read().sof().bit() {
+						otg_fs_global.gintsts.write(|w| w.sof().set_bit());
 						write!(tx, "{:8}\x08\x08\x08\x08\x08\x08\x08\x08", sofcount);
 						sofcount += 1;
 					}
 
-					while dp.OTG_FS_GLOBAL.gintsts.read().rxflvl().bit() {
-						writeln!(tx, "read");
+					while otg_fs_global.gintsts.read().rxflvl().bit() {
+						writeln!(tx, "read").ok();
 						// TODO do things
 					}
 
 					// OTGINT
-					if dp.OTG_FS_GLOBAL.gintsts.read().otgint().bit() {
-						let val = dp.OTG_FS_GLOBAL.gotgint.read().bits();
-						writeln!(tx, "otg {:08x}", val);
-						dp.OTG_FS_GLOBAL.gotgint.modify(|_,w| w.bits(val));
+					if otg_fs_global.gintsts.read().otgint().bit() {
+						let val = otg_fs_global.gotgint.read().bits();
+						writeln!(tx, "otg {:08x}", val).ok();
+						otg_fs_global.gotgint.modify(|_,w| w.bits(val));
 					}
 
 					// HPRTINT
-					if dp.OTG_FS_GLOBAL.gintsts.read().hprtint().bit() {
-						let val = dp.OTG_FS_HOST.hprt.read();
-						writeln!(tx, "hprt {:08x}", val.bits());
+					if otg_fs_global.gintsts.read().hprtint().bit() {
+						let val = otg_fs_host.hprt.read();
+						writeln!(tx, "hprt {:08x}", val.bits()).ok();
 
 						if val.penchng().bit() {
-							writeln!(tx, "penchng, port enabled is {}", val.pena().bit());
+							writeln!(tx, "penchng, port enabled is {}", val.pena().bit()).ok();
 						}
 
 						if val.pocchng().bit() {
-							writeln!(tx, "overcurrent");
+							writeln!(tx, "overcurrent").ok();
 						}
 
 						if val.pcdet().bit() {
-							writeln!(tx, "port connect detected (pcdet)");
+							writeln!(tx, "port connect detected (pcdet)").ok();
 						}
 				
-						writeln!(tx, "hprt before {:08x}", val.bits());
-						dp.OTG_FS_HOST.hprt.modify(|r,w| w.bits(r.bits() & !4)); // do not set PENA???
-						writeln!(tx, "hprt after {:08x}", val.bits());
+						writeln!(tx, "hprt before {:08x}", val.bits()).ok();
+						otg_fs_host.hprt.modify(|r,w| w.bits(r.bits() & !4)); // do not set PENA???
+						writeln!(tx, "hprt after {:08x}", val.bits()).ok();
 					}
 
 					// DISCINT
-					if dp.OTG_FS_GLOBAL.gintsts.read().discint().bit() {
-						dp.OTG_FS_GLOBAL.gintsts.write(|w| w.discint().set_bit());
-						writeln!(tx, "disconnect (discint)");
+					if otg_fs_global.gintsts.read().discint().bit() {
+						otg_fs_global.gintsts.write(|w| w.discint().set_bit());
+						writeln!(tx, "disconnect (discint)").ok();
+						yield Some(UsbLoop::Disconnected);
 						break;
 					}
 
 					// MMIS
-					if dp.OTG_FS_GLOBAL.gintsts.read().mmis().bit() {
-						dp.OTG_FS_GLOBAL.gintsts.write(|w| w.mmis().set_bit());
-						writeln!(tx, "mode mismatch (mmis)");
+					if otg_fs_global.gintsts.read().mmis().bit() {
+						otg_fs_global.gintsts.write(|w| w.mmis().set_bit());
+						writeln!(tx, "mode mismatch (mmis)").ok();
 					}
 
 					// IPXFR
-					if dp.OTG_FS_GLOBAL.gintsts.read().ipxfr_incompisoout().bit(){
-						dp.OTG_FS_GLOBAL.gintsts.write(|w| w.ipxfr_incompisoout().set_bit());
-						writeln!(tx, "ipxfr");
+					if otg_fs_global.gintsts.read().ipxfr_incompisoout().bit(){
+						otg_fs_global.gintsts.write(|w| w.ipxfr_incompisoout().set_bit());
+						writeln!(tx, "ipxfr").ok();
 					}
 
 					// HCINT
-					if dp.OTG_FS_GLOBAL.gintsts.read().hcint().bit() {
-						writeln!(tx, "hcint");
+					if otg_fs_global.gintsts.read().hcint().bit() {
+						writeln!(tx, "hcint").ok();
 
 						// TODO
 					}
 
 					delay.delay_ms(1_u32);
+					yield None;
 				}
 			}
+		}};
+
+		loop {
+			if let core::ops::GeneratorState::Yielded( Some(x) ) = core::pin::Pin::new(&mut statemachine).resume(())
+			{
+				writeln!(tx2, "<<<< {:?} >>>>", x);
+			}
+			 
 		}
+
 	}
 
 	loop {}
