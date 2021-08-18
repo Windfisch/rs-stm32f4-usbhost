@@ -13,11 +13,13 @@ cortex-m = "0.7"
 cortex-m-rt = "0.6"
 # Panic behaviour, see https://crates.io/keywords/panic-impl for alternatives
 panic-halt = "0.2"
+stm32f4 = "0.13"
 
 [dependencies.stm32f4xx-hal]
-version = "0.9"
-features = ["rt", "stm32f407"] # replace the model of your microcontroller here
-#features = ["rt", "stm32f411"] # replace the model of your microcontroller here FIXME
+#version = "0.9"
+path="/home/flo/stm32f4xx-hal"
+#features = ["rt", "stm32f407"] # replace the model of your microcontroller here
+features = ["rt", "stm32f411"] # replace the model of your microcontroller here FIXME
 
 [unstable]
 build-std = ["core"]
