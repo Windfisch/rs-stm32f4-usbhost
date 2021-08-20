@@ -35,11 +35,11 @@ fn main() -> ! {
 		let mut led = gpioc.pc13.into_push_pull_output();
 
 		let gpioa = dp.GPIOA.split();
-		let dm_pin = gpioa.pa11.into_alternate_af10();
-		let dp_pin = gpioa.pa12.into_alternate_af10();
+		let dm_pin = gpioa.pa11.into_alternate_af10().internal_pull_down(true);
+		let dp_pin = gpioa.pa12.into_alternate_af10().internal_pull_down(true);
 
 		// Create a delay abstraction based on SysTick
-		let mut delay = hal::delay::Delay::new(cp.SYST, clocks);
+		let mut delay = hal::delay::Delay::new(cp.SYST, &clocks);
 
 
 		// Configure the USART
