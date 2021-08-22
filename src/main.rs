@@ -94,15 +94,15 @@ fn main() -> ! {
 				.fhmod().set_bit() // must wait for 25ms before the change takes effect
 			);
 		
-			/*
+			
 			// configure vbus sensing
 			otg_fs_global.gccfg.modify(|_, w| w
-				.vbusasen().set_bit()
-				//.vbusbsen().set_bit()
+			//	.vbusasen().set_bit()
+			//	//.vbusbsen().set_bit()
 				.pwrdwn().set_bit()
 			);
-			otg_fs_global.gccfg.modify(|r, w| w.bits( r.bits() | (1<<21) )); // NOVBUSSENS
-			*/
+			//otg_fs_global.gccfg.modify(|r, w| w.bits( r.bits() | (1<<21) )); // NOVBUSSENS
+			
 
 			// "Core initialization" step 3
 			otg_fs_global.gintmsk.modify(|_,w| w // FIXME FIXME FIXME the C code has them all zero
