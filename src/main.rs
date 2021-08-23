@@ -190,11 +190,13 @@ fn main() -> ! {
 
 				// ---- done ----
 				otg_fs_global.gintmsk.modify(|_,w| w.hcim().set_bit());
-				// TODO maybe unmask NPTXFEM or so
 
-				const N_CHANNELS: u32 = 8;
-				otg_fs_host.haintmsk.write(|w| w.bits( (1<<N_CHANNELS)-1 ));
+				otg_fs_global.gintmsk.modify(|_,w| w.nptxfem().set_bit());
 
+//				const N_CHANNELS: u32 = 8;
+//				otg_fs_host.haintmsk.write(|w| w.bits( (1<<N_CHANNELS)-1 ));
+
+/*
 				macro_rules! hcint {
 					($HCINT:ident, $HCINTMSK:ident) => {
 							otg_fs_host.$HCINTMSK.write(|w| w
@@ -219,17 +221,14 @@ fn main() -> ! {
 				hcint!(hcint5, hcintmsk5);
 				hcint!(hcint6, hcintmsk6);
 				hcint!(hcint7, hcintmsk7);
-
-
-
-
+*/
 				// "host programming model"/"channel initialization"
 
 
 
 				delay.delay_ms(250_u32);
 
-				otg_fs_global.gintmsk.modify(|_,w| w.bits(0));
+				otg_fs_global.gintmsk.modify(|_,w| w.hcim().set_bit());
 				otg_fs_global.gintsts.modify(|_,w| w.bits(!0));
 
 
@@ -241,16 +240,37 @@ fn main() -> ! {
 
 				yield Some(UsbLoop::Connected);
 
+
 				loop {
 					if otg_fs_global.gintsts.read().sof().bit() {
 						otg_fs_global.gintsts.write(|w| w.sof().set_bit());
-						write!(tx, "{:8}\x08\x08\x08\x08\x08\x08\x08\x08", sofcount);
+						//write!(tx, "{:8} {:08x}\r", sofcount, otg_fs_host.hcchar0.read().bits());
+						write!(tx, "{:8} {:08x} {:08x}\r", sofcount, otg_fs_host.hfnum.read().bits(), otg_fs_global.gnptxsts.read().bits());
+						//writeln!(tx, "hprt = {:08x}", otg_fs_host.hprt.read().bits()).ok();
+						//write!(tx, "{:08x}\r", otg_fs_global.gintsts.read().bits());
 						sofcount += 1;
 					}
 
-					while otg_fs_global.gintsts.read().rxflvl().bit() {
-						writeln!(tx, "read").ok();
+					let frame_number = otg_fs_host.hfnum.read().frnum().bits();
+
+					while otg_fs_global.gintsts.read().srqint().bit() {
+						writeln!(tx, "srqint").ok();
+						otg_fs_global.gintsts.write(|w| w.srqint().set_bit());
 						// TODO do things
+					}
+
+					while otg_fs_global.gintsts.read().rxflvl().bit() {
+						let rxstsp = otg_fs_global.grxstsp_host().read();
+						writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
+							match rxstsp.pktsts().bits() {
+								2 => "IN data packet received",
+								3 => "IN transfer completed",
+								5 => "Data toggle error",
+								7 => "Channel halted",
+								_ => "(unknown)"
+							}
+						).ok();
+						// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
 					}
 
 					// OTGINT
@@ -266,7 +286,53 @@ fn main() -> ! {
 						writeln!(tx, "hprt {:08x}", val.bits()).ok();
 
 						if val.penchng().bit() {
-							writeln!(tx, "penchng, port enabled is {}", val.pena().bit()).ok();
+							writeln!(tx, "#{}, penchng, port enabled is {}", frame_number, val.pena().bit()).ok();
+
+							otg_fs_host.hcint0.write(|w| w.bits(!0));
+							otg_fs_host.hcintmsk0.write(|w| w
+								.xfrcm().set_bit()
+								.chhm().set_bit()
+								.stallm().set_bit()
+								.nakm().set_bit()
+								.ackm().set_bit()
+								.txerrm().set_bit()
+								.bberrm().set_bit()
+								.frmorm().set_bit()
+								.dterrm().set_bit()
+							);
+							
+							otg_fs_host.haintmsk.write(|w| w.bits(1<<0));
+								
+							
+
+							otg_fs_host.hctsiz0.modify(|_, w| w
+								.dpid().bits(0) // data0
+								.pktcnt().bits(4)
+								.xfrsiz().bits(8)
+							);
+							otg_fs_host.hcchar0.modify(|_, w| w
+								.dad().bits(0)
+								.mcnt().bits(1)
+								.epdir().clear_bit()
+								//.lsdev().set_bit() // TODO
+								.epnum().bits(0) // 1 == in
+								.eptyp().bits(0) // 0 == control
+								.mpsiz().bits(64)
+							);
+							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+
+							unsafe {
+								core::ptr::write_volatile((0x50001000 +64) as *mut u32, 0xdeadbeef);
+								writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+								core::ptr::write_volatile((0x50001004 +64) as *mut u32, 0xdeadbeef);
+								writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+								//core::ptr::write_volatile((0x50001008 +64) as *mut u32, 0xdeadbeef);
+							}
+							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+
+							otg_fs_host.hcchar0.modify(|_, w| w
+								.chena().set_bit()
+							);
 						}
 
 						if val.pocchng().bit() {
@@ -277,9 +343,7 @@ fn main() -> ! {
 							writeln!(tx, "port connect detected (pcdet)").ok();
 						}
 				
-						writeln!(tx, "hprt before {:08x}", val.bits()).ok();
 						otg_fs_host.hprt.modify(|r,w| w.bits(r.bits() & !4)); // do not set PENA???
-						writeln!(tx, "hprt after {:08x}", val.bits()).ok();
 					}
 
 					// DISCINT
@@ -304,12 +368,18 @@ fn main() -> ! {
 
 					// HCINT
 					if otg_fs_global.gintsts.read().hcint().bit() {
-						writeln!(tx, "hcint").ok();
-
-						// TODO
+						let haint = otg_fs_host.haint.read().bits();
+						writeln!(tx, "#{} hcint (haint = {:08x})", frame_number, haint).ok();
+						for i in 0..8 {
+							if haint & (1 << i) != 0 {
+								writeln!(tx, "hcint{} = {:08x}", i, otg_fs_host.hcintx(i).read().bits());
+								otg_fs_host.hcintx(i).write(|w| w.bits(!0));
+							}
+						}
+						// TODO p 681 ff
 					}
 
-					delay.delay_ms(1_u32);
+					//delay.delay_ms(1_u32);
 					yield None;
 				}
 			}
