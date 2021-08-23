@@ -20,6 +20,37 @@ enum UsbLoop {
 	Disconnected
 }
 
+trait Fnord {
+	fn hcintx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0;
+	fn hccharx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0;
+	fn hcintmskx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0;
+	fn hctsizx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0;
+}
+
+impl Fnord for stm32f4xx_hal::pac::OTG_FS_HOST {
+	fn hcintx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0 {
+		assert!(i < 8);
+		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCINT0 = &self.hcint0;
+		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
+	}
+	fn hcintmskx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0 {
+		assert!(i < 8);
+		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0 = &self.hcintmsk0;
+		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
+	}
+	fn hctsizx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0 {
+		assert!(i < 8);
+		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0 = &self.hctsiz0;
+		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
+	}
+	fn hccharx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0 {
+		assert!(i < 8);
+		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0 = &self.hcchar0;
+		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
+	}
+}
+
+
 #[entry]
 fn main() -> ! {
 	if let (Some(dp), Some(cp)) = (

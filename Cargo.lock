@@ -38,16 +38,17 @@ dependencies = [
  "embedded-hal",
  "nb 1.0.0",
  "panic-halt",
+ "stm32f4",
  "stm32f4xx-hal",
 ]
 
 [[package]]
 name = "cast"
-version = "0.2.6"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57cdfa5d50aad6cb4d44dcab6101a7f79925bd59d82ca42f38a9856a28865374"
+checksum = "4c24dab4283a142afa2fdca129b80ad2c6284e073930f964c3a1293c225ee39a"
 dependencies = [
- "rustc_version 0.3.3",
+ "rustc_version 0.4.0",
 ]
 
 [[package]]
