@@ -73,6 +73,9 @@ fn main() -> ! {
 		let mut delay = hal::delay::Delay::new(cp.SYST, &clocks);
 
 
+		let mut trigger_pin = gpioa.pa0.into_push_pull_output();
+		trigger_pin.set_low();
+
 		// Configure the USART
 		let gpio_tx = gpioa.pa9.into_alternate_af7();
 		let gpio_rx = gpioa.pa10.into_alternate_af7();
@@ -330,6 +333,7 @@ fn main() -> ! {
 							}
 							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
 
+							trigger_pin.set_high();
 							otg_fs_host.hcchar0.modify(|_, w| w
 								.chena().set_bit()
 							);
@@ -368,6 +372,7 @@ fn main() -> ! {
 
 					// HCINT
 					if otg_fs_global.gintsts.read().hcint().bit() {
+						trigger_pin.set_low();
 						let haint = otg_fs_host.haint.read().bits();
 						writeln!(tx, "#{} hcint (haint = {:08x})", frame_number, haint).ok();
 						for i in 0..8 {
