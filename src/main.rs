@@ -305,13 +305,13 @@ fn main() -> ! {
 							);
 							
 							otg_fs_host.haintmsk.write(|w| w.bits(1<<0));
-								
+							
 							
 
 							otg_fs_host.hctsiz0.modify(|_, w| w
 								.dpid().bits(0) // data0
-								.pktcnt().bits(4)
-								.xfrsiz().bits(8)
+								.pktcnt().bits(1)
+								.xfrsiz().bits(3)
 							);
 							otg_fs_host.hcchar0.modify(|_, w| w
 								.dad().bits(0)
@@ -320,23 +320,53 @@ fn main() -> ! {
 								//.lsdev().set_bit() // TODO
 								.epnum().bits(0) // 1 == in
 								.eptyp().bits(0) // 0 == control
-								.mpsiz().bits(64)
+								.mpsiz().bits(4)
 							);
-							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
-
-							unsafe {
-								core::ptr::write_volatile((0x50001000 +64) as *mut u32, 0xdeadbeef);
-								writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
-								core::ptr::write_volatile((0x50001004 +64) as *mut u32, 0xdeadbeef);
-								writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
-								//core::ptr::write_volatile((0x50001008 +64) as *mut u32, 0xdeadbeef);
-							}
 							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
 
 							trigger_pin.set_high();
+							unsafe {
+								// NOTE: it does not matter where to write in the area 0x50001000 to 0x50001FFF. You can write your four-byte-chunks in ascending address order
+								// (as memcpy would do), but you can also write them all to the same address (e.g. 0x50001000) or in descending addresses. I.e. reverse memcpy
+								// would *not* cause the same result as memcpy
+								//core::ptr::write_volatile((0x50001f00) as *mut u32, 0xdeadbeef);
+								//writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+							otg_fs_host.hctsiz0.modify(|_, w| w
+								.dpid().bits(0) // data0
+								.pktcnt().bits(1)
+								.xfrsiz().bits(7)
+							);
+
+							// NOTE: setting pktcnt correctly is *not* needed to send a packet.
+							// Instead, always ceil(xfrsiz / mpsiz) packets are sent; the first n-1 packets are mpsiz long, the last has the remaining length.
+							// However, only after `pktcount` packets have been sent, a "transfer complete" interrupt is generated. So even if *sending* works
+							// without setting pktcount, getting notified after the send completes would not work.
+
+							// NOTE: the CHENA is pure user convenience. It does *not* control actual activation of the channel (which is triggered
+							// by writing enough words to the FIFO). But the application will clear this bit after successfully transmitting `pktcnt` packets,
+							// i.e. at the same time when the "transmission complete" interrupt is generated. If the user sets the bit, they can easily poll
+							// which channels are free; however, the user *could* implement this bookkeeping using the transmission complete interrupt with their
+							// own array, if they wanted to.
 							otg_fs_host.hcchar0.modify(|_, w| w
 								.chena().set_bit()
 							);
+								core::ptr::write_volatile((0x50001000) as *mut u32, 0xbaadf00d);
+								core::ptr::write_volatile((0x50001000) as *mut u32, 0x11111111);
+								core::ptr::write_volatile((0x50001000) as *mut u32, 0x22222222);
+								//writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+								//core::ptr::write_volatile((0x50001008 +64) as *mut u32, 0xdeadbeef);
+							}
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+							
 						}
 
 						if val.pocchng().bit() {
@@ -379,9 +409,9 @@ fn main() -> ! {
 							if haint & (1 << i) != 0 {
 								writeln!(tx, "hcint{} = {:08x}", i, otg_fs_host.hcintx(i).read().bits());
 								otg_fs_host.hcintx(i).write(|w| w.bits(!0));
+								writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
 							}
 						}
-						// TODO p 681 ff
 					}
 
 					//delay.delay_ms(1_u32);
