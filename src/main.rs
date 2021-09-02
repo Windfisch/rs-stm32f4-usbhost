@@ -3,6 +3,8 @@
 #![no_std]
 
 use core::ops::Generator;
+
+use core::convert::TryInto;
 // Halt on panic
 use panic_halt as _; // panic handler
 
@@ -17,7 +19,8 @@ use crate::hal::{prelude::*, stm32};
 #[derive(Debug)]
 enum UsbLoop {
 	Connected,
-	Disconnected
+	Disconnected,
+	IgnoreThis
 }
 
 trait Fnord {
@@ -308,10 +311,18 @@ fn main() -> ! {
 							
 							
 
+							let setup_packet = [
+								0x00u8, // device, standard, host to device
+								0x05, // set address
+								0x01, 0x00, // address 1
+								0x00, 0x00, // index
+								0x00, 0x00, // length
+							];
+
 							otg_fs_host.hctsiz0.modify(|_, w| w
-								.dpid().bits(0) // data0
+								.dpid().bits(3) // mdata. magically turns the OUT token into a SETUP token
 								.pktcnt().bits(1)
-								.xfrsiz().bits(3)
+								.xfrsiz().bits(8)
 							);
 							otg_fs_host.hcchar0.modify(|_, w| w
 								.dad().bits(0)
@@ -320,7 +331,7 @@ fn main() -> ! {
 								//.lsdev().set_bit() // TODO
 								.epnum().bits(0) // 1 == in
 								.eptyp().bits(0) // 0 == control
-								.mpsiz().bits(4)
+								.mpsiz().bits(64)
 							);
 							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
 
@@ -331,41 +342,64 @@ fn main() -> ! {
 								// would *not* cause the same result as memcpy
 								//core::ptr::write_volatile((0x50001f00) as *mut u32, 0xdeadbeef);
 								//writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
-							otg_fs_host.hctsiz0.modify(|_, w| w
-								.dpid().bits(0) // data0
-								.pktcnt().bits(1)
-								.xfrsiz().bits(7)
-							);
 
-							// NOTE: setting pktcnt correctly is *not* needed to send a packet.
-							// Instead, always ceil(xfrsiz / mpsiz) packets are sent; the first n-1 packets are mpsiz long, the last has the remaining length.
-							// However, only after `pktcount` packets have been sent, a "transfer complete" interrupt is generated. So even if *sending* works
-							// without setting pktcount, getting notified after the send completes would not work.
+								// NOTE: setting pktcnt correctly is *not* needed to send a packet.
+								// Instead, always ceil(xfrsiz / mpsiz) packets are sent; the first n-1 packets are mpsiz long, the last has the remaining length.
+								// However, only after `pktcount` packets have been sent, a "transfer complete" interrupt is generated. So even if *sending* works
+								// without setting pktcount, getting notified after the send completes would not work.
 
-							// NOTE: the CHENA is pure user convenience. It does *not* control actual activation of the channel (which is triggered
-							// by writing enough words to the FIFO). But the application will clear this bit after successfully transmitting `pktcnt` packets,
-							// i.e. at the same time when the "transmission complete" interrupt is generated. If the user sets the bit, they can easily poll
-							// which channels are free; however, the user *could* implement this bookkeeping using the transmission complete interrupt with their
-							// own array, if they wanted to.
-							otg_fs_host.hcchar0.modify(|_, w| w
-								.chena().set_bit()
-							);
-								core::ptr::write_volatile((0x50001000) as *mut u32, 0xbaadf00d);
-								core::ptr::write_volatile((0x50001000) as *mut u32, 0x11111111);
-								core::ptr::write_volatile((0x50001000) as *mut u32, 0x22222222);
-								//writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
-								//core::ptr::write_volatile((0x50001008 +64) as *mut u32, 0xdeadbeef);
+								// NOTE: the CHENA is pure user convenience. It does *not* control actual activation of the channel (which is triggered
+								// by writing enough words to the FIFO). But the application will clear this bit after successfully transmitting `pktcnt` packets,
+								// i.e. at the same time when the "transmission complete" interrupt is generated. If the user sets the bit, they can easily poll
+								// which channels are free; however, the user *could* implement this bookkeeping using the transmission complete interrupt with their
+								// own array, if they wanted to.
+								otg_fs_host.hcchar0.modify(|_, w| w.chena().set_bit());
+								core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
 							}
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+							while otg_fs_host.hcchar0.read().chena().bit() {
+								//yield Some(UsbLoop::IgnoreThis);
+							}
+							trigger_pin.set_low();
+
+							otg_fs_host.hctsiz0.modify(|_, w| w
+								.dpid().bits(2)
+								.pktcnt().bits(0)
+								.xfrsiz().bits(0)
+							);
+							otg_fs_host.hcchar0.modify(|_, w| w
+								.dad().bits(0)
+								.mcnt().bits(1)
+								.epdir().set_bit()
+								//.lsdev().set_bit() // TODO
+								.epnum().bits(0) // 1 == in
+								.eptyp().bits(0) // 0 == control
+								.mpsiz().bits(64)
+							);
+							otg_fs_host.hcchar0.modify(|_, w| w.chena().set_bit());
+							//core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
+					
+							while otg_fs_host.hcchar0.read().chena().bit() {
+								writeln!(tx, "waiting for chena to become 0");
+								while !otg_fs_global.gintsts.read().rxflvl().bit() {
+									//writeln!(tx, "waiting for rxflvl");
+								}
+								writeln!(tx, "gotcha");
+								while otg_fs_global.gintsts.read().rxflvl().bit() { // FIXME duplicated code
+									let rxstsp = otg_fs_global.grxstsp_host().read();
+									writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
+										match rxstsp.pktsts().bits() {
+											2 => "IN data packet received",
+											3 => "IN transfer completed",
+											5 => "Data toggle error",
+											7 => "Channel halted",
+											_ => "(unknown)"
+										}
+									).ok();
+									// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
+								}
+							}
+
+							writeln!(tx, "done");
 							
 						}
 
