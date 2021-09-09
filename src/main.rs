@@ -294,22 +294,24 @@ fn main() -> ! {
 						if val.penchng().bit() {
 							writeln!(tx, "#{}, penchng, port enabled is {}", frame_number, val.pena().bit()).ok();
 
-							otg_fs_host.hcint0.write(|w| w.bits(!0));
-							otg_fs_host.hcintmsk0.write(|w| w
-								.xfrcm().set_bit()
-								.chhm().set_bit()
-								.stallm().set_bit()
-								.nakm().set_bit()
-								.ackm().set_bit()
-								.txerrm().set_bit()
-								.bberrm().set_bit()
-								.frmorm().set_bit()
-								.dterrm().set_bit()
-							);
+							for i in 0..=1 {
+								otg_fs_host.hcintx(i).write(|w| w.bits(!0));
+								otg_fs_host.hcintmskx(i).write(|w| w
+									.xfrcm().set_bit()
+									.chhm().set_bit()
+									.stallm().set_bit()
+									.nakm().set_bit()
+									.ackm().set_bit()
+									.txerrm().set_bit()
+									.bberrm().set_bit()
+									.frmorm().set_bit()
+									.dterrm().set_bit()
+								);
+							}
 							
 							otg_fs_host.haintmsk.write(|w| w.bits(1<<0));
 							
-							
+						
 
 							let setup_packet = [
 								0x00u8, // device, standard, host to device
@@ -398,6 +400,84 @@ fn main() -> ! {
 									// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
 								}
 							}
+
+							otg_fs_host.hcchar0.modify(|_, w| w.chdis().set_bit());
+
+							trigger_pin.set_high();
+							otg_fs_host.hctsiz1.modify(|_, w| w
+								.dpid().bits(3)
+								.pktcnt().bits(1)
+								.xfrsiz().bits(8)
+							);
+							otg_fs_host.hcchar1.modify(|_, w| w
+								.dad().bits(1)
+								.mcnt().bits(1)
+								.epdir().clear_bit()
+								//.lsdev().set_bit() // TODO
+								.epnum().bits(0) // 1 == in
+								.eptyp().bits(0) // 0 == control
+								.mpsiz().bits(64)
+							);
+							let get_descriptor_packet = [
+								0x80u8, // device, standard, host to device
+								0x06, // get descriptor
+								0x00, 0x01, // descriptor 1
+								0x00, 0x00, // index
+								18, 0, // length
+							];
+
+							unsafe {
+								core::ptr::write_volatile((0x50002000) as *mut [u8; 8], get_descriptor_packet);
+							}
+
+							otg_fs_host.hcchar1.modify(|_, w| w.chena().set_bit());
+
+							while otg_fs_host.hcchar1.read().chena().bit() {
+								//yield Some(UsbLoop::IgnoreThis);
+							}
+							
+							otg_fs_host.hctsiz1.modify(|_, w| w
+								.dpid().bits(2)
+								.pktcnt().bits(1)
+								.xfrsiz().bits(18)
+							);
+							otg_fs_host.hcchar1.modify(|_, w| w
+								.dad().bits(1)
+								.mcnt().bits(1)
+								.epdir().set_bit()
+								//.lsdev().set_bit() // TODO
+								.epnum().bits(0) // 1 == in
+								.eptyp().bits(0) // 0 == control
+								.mpsiz().bits(64)
+							);
+							otg_fs_host.hcchar1.modify(|_, w| w.chena().set_bit());
+							//core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
+					
+							//while otg_fs_host.hcchar1.read().chena().bit() {
+								writeln!(tx, "waiting for chena to become 0");
+								while !otg_fs_global.gintsts.read().rxflvl().bit() {
+									writeln!(tx, "waiting for rxflvl");
+								}
+								writeln!(tx, "gotcha");
+								while otg_fs_global.gintsts.read().rxflvl().bit() { // FIXME duplicated code
+									let rxstsp = otg_fs_global.grxstsp_host().read();
+									writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
+										match rxstsp.pktsts().bits() {
+											2 => "IN data packet received",
+											3 => "IN transfer completed",
+											5 => "Data toggle error",
+											7 => "Channel halted",
+											_ => "(unknown)"
+										}
+									).ok();
+									for i in (0..20).step_by(4) {
+										write!(tx, "{:08x} ", core::ptr::read_volatile((0x50002000) as *mut u32));
+									}
+									writeln!(tx, ".");
+									// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
+								}
+							//}
+
 
 							writeln!(tx, "done");
 							
