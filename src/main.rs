@@ -2,7 +2,9 @@
 #![no_main]
 #![no_std]
 
-use core::ops::Generator;
+use core::future::Future;
+use core::pin::Pin;
+use core::{cell::RefCell, ops::Generator};
 
 use core::convert::TryInto;
 // Halt on panic
@@ -16,6 +18,8 @@ use core::fmt::Write;
 
 use crate::hal::{prelude::*, stm32};
 
+use core::task::{Poll, Context};
+
 #[derive(Debug)]
 enum UsbLoop {
 	Connected,
@@ -23,30 +27,304 @@ enum UsbLoop {
 	IgnoreThis
 }
 
+enum TransferState {
+	WaitingForAvailableChannel,
+	WaitingForTransferToFinish(u8)
+}
+
+struct UsbGlobals {
+	grxsts: Option<stm32f4xx_hal::pac::otg_fs_global::grxstsp_host::R>,
+	usb_host: &'static stm32f4xx_hal::pac::OTG_FS_HOST,
+}
+
+struct UsbOutTransfer<'a> {
+	data: &'a [u8],
+	state: TransferState,
+	globals: &'a RefCell<UsbGlobals>,
+}
+
+struct UsbInTransfer<'a> {
+	data: &'a [u8],
+	state: TransferState,
+	globals: &'a RefCell<UsbGlobals>,
+	rx_pointer: usize
+}
+
+enum UsbError {
+	DataToggleError,
+	Unknown
+}
+
+impl Future for UsbInTransfer<'_> {
+	type Output = Result<(), UsbError>;
+
+	fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), UsbError>> {
+		let globals = self.globals.borrow_mut();
+		let usb_host = globals.usb_host;
+		//let tx = self.globals.tx;
+		match self.state {
+			TransferState::WaitingForAvailableChannel => {
+				let available_channel = (0..8).find(|i| usb_host.hccharx(*i).read().chena().bit_is_clear());
+				if let Some(channel) = available_channel {
+					unsafe {
+						usb_host.hctsizx(channel).modify(|_, w| w
+							.dpid().bits(2)
+							.pktcnt().bits(1)
+							.xfrsiz().bits(18)
+						);
+						usb_host.hcchar0.modify(|_, w| w
+							.dad().bits(1)
+							.mcnt().bits(1)
+							.epdir().set_bit()
+							//.lsdev().set_bit() // TODO
+							.epnum().bits(0) // 1 == in
+							.eptyp().bits(0) // 0 == control
+							.mpsiz().bits(64)
+							.chena().set_bit()
+						);
+					}
+
+					self.state = TransferState::WaitingForTransferToFinish(channel);
+				}
+			}
+			TransferState::WaitingForTransferToFinish(channel) => {
+				if usb_host.hccharx(channel).read().chena().bit_is_clear() {
+					return Poll::Ready(Ok(()));
+				}
+				else {
+					if let Some(grxsts) = globals.grxsts {
+						if grxsts.chnum().bits() == channel {
+							writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, grxsts.chnum().bits(), grxsts.dpid().bits(), grxsts.bcnt().bits(), grxsts.pktsts().bits(),
+								match grxsts.pktsts().bits() { // TODO FIXME handle properly, return Err()
+									2 => "IN data packet received",
+									3 => "IN transfer completed",
+									5 => "Data toggle error",
+									7 => "Channel halted",
+									_ => "(unknown)"
+								}
+							).ok();
+
+							if (error_condition) {
+								// FIXME: cleanup
+								return Poll::Ready(Err(TODO));
+							}
+
+							assert!(grxsts.bcnt().bits() % 4 == 0);
+							for i in (0 .. (grxsts.bcnt().bits() as usize)).step_by(4) {
+								let fifo_word = unsafe { core::ptr::read_volatile((0x50001000 + channel * 0x1000) as *mut [u8; 4]) };
+								self.data[(self.rx_pointer + i) .. (self.rx_pointer + i + 4)].copy_from_slice(&fifo_word);
+							}
+						}
+					}
+				}
+			}
+		}
+		return Poll::Pending;
+	}
+}
+
+impl Future for UsbOutTransfer<'_> {
+	type Output = ();
+
+	fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+		let globals = self.globals.borrow_mut();
+		let usb_host = globals.usb_host;
+		//let tx = self.globals.tx;
+		match self.state {
+			TransferState::WaitingForAvailableChannel => {
+				let available_channel = (0..8).find(|i| usb_host.hccharx(*i).read().chena().bit_is_clear());
+				if let Some(channel) = available_channel {
+					unsafe {
+						usb_host.hctsizx(channel).modify(|_, w| w
+							.dpid().bits(3) // mdata. magically turns the OUT token into a SETUP token
+							.pktcnt().bits(1)
+							.xfrsiz().bits(8)
+						);
+						usb_host.hcchar0.modify(|_, w| w
+							.dad().bits(0)
+							.mcnt().bits(1)
+							.epdir().clear_bit()
+							//.lsdev().set_bit() // TODO
+							.epnum().bits(0) // 1 == in
+							.eptyp().bits(0) // 0 == control
+							.mpsiz().bits(64)
+							.chena().set_bit()
+						);
+						core::ptr::write_volatile((0x50001000) as *mut [u8; 8], self.data);
+						//writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+					}
+
+					self.state = TransferState::WaitingForTransferToFinish(channel);
+				}
+			}
+			TransferState::WaitingForTransferToFinish(channel) => {
+				if usb_host.hccharx(channel).read().chena().bit_is_clear() {
+					return Poll::Ready(());
+				}
+			}
+		}
+		return Poll::Pending;
+	}
+}
+
+fn loop_when_connected() {
+	loop {
+		globals.grxsts = None;
+
+		if otg_fs_global.gintsts.read().sof().bit() {
+			otg_fs_global.gintsts.write(|w| w.sof().set_bit());
+			//write!(tx, "{:8} {:08x}\r", sofcount, otg_fs_host.hcchar0.read().bits());
+			write!(tx, "{:8} {:08x} {:08x}\r", sofcount, otg_fs_host.hfnum.read().bits(), otg_fs_global.gnptxsts.read().bits());
+			//writeln!(tx, "hprt = {:08x}", otg_fs_host.hprt.read().bits()).ok();
+			//write!(tx, "{:08x}\r", otg_fs_global.gintsts.read().bits());
+			sofcount += 1;
+		}
+
+		let frame_number = otg_fs_host.hfnum.read().frnum().bits();
+
+		while otg_fs_global.gintsts.read().srqint().bit() {
+			writeln!(tx, "srqint").ok();
+			otg_fs_global.gintsts.write(|w| w.srqint().set_bit());
+			// TODO do things
+		}
+
+		while otg_fs_global.gintsts.read().rxflvl().bit() {
+			globals.grxsts = Some(otg_fs_global.grxstsp_host().read());
+
+			writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
+				match rxstsp.pktsts().bits() {
+					2 => "IN data packet received",
+					3 => "IN transfer completed",
+					5 => "Data toggle error",
+					7 => "Channel halted",
+					_ => "(unknown)"
+				}
+			).ok();
+		}
+
+		// OTGINT
+		if otg_fs_global.gintsts.read().otgint().bit() {
+			let val = otg_fs_global.gotgint.read().bits();
+			writeln!(tx, "otg {:08x}", val).ok();
+			otg_fs_global.gotgint.modify(|_,w| w.bits(val));
+		}
+		
+		// HPRTINT
+		if otg_fs_global.gintsts.read().hprtint().bit() {
+			let val = otg_fs_host.hprt.read();
+			writeln!(tx, "hprt {:08x}", val.bits()).ok();
+
+			if val.penchng().bit() {
+				writeln!(tx, "#{}, penchng, port enabled is {}", frame_number, val.pena().bit()).ok();
+
+				for i in 0..=1 {
+					otg_fs_host.hcintx(i).write(|w| w.bits(!0));
+					otg_fs_host.hcintmskx(i).write(|w| w
+						.xfrcm().set_bit()
+						.chhm().set_bit()
+						.stallm().set_bit()
+						.nakm().set_bit()
+						.ackm().set_bit()
+						.txerrm().set_bit()
+						.bberrm().set_bit()
+						.frmorm().set_bit()
+						.dterrm().set_bit()
+					);
+				}
+				
+				otg_fs_host.haintmsk.write(|w| w.bits(1<<0));
+				
+			
+
+				let setup_packet = [
+					0x00u8, // device, standard, host to device
+					0x05, // set address
+					0x01, 0x00, // address 1
+					0x00, 0x00, // index
+					0x00, 0x00, // length
+				];
+
+				// TODO: use fancy futures
+
+				writeln!(tx, "done");
+				
+			}
+
+			if val.pocchng().bit() {
+				writeln!(tx, "overcurrent").ok();
+			}
+
+			if val.pcdet().bit() {
+				writeln!(tx, "port connect detected (pcdet)").ok();
+			}
+	
+			otg_fs_host.hprt.modify(|r,w| w.bits(r.bits() & !4)); // do not set PENA???
+		}
+
+		// DISCINT
+		if otg_fs_global.gintsts.read().discint().bit() {
+			otg_fs_global.gintsts.write(|w| w.discint().set_bit());
+			writeln!(tx, "disconnect (discint)").ok();
+			yield Some(UsbLoop::Disconnected);
+			break;
+		}
+
+		// MMIS
+		if otg_fs_global.gintsts.read().mmis().bit() {
+			otg_fs_global.gintsts.write(|w| w.mmis().set_bit());
+			writeln!(tx, "mode mismatch (mmis)").ok();
+		}
+
+		// IPXFR
+		if otg_fs_global.gintsts.read().ipxfr_incompisoout().bit(){
+			otg_fs_global.gintsts.write(|w| w.ipxfr_incompisoout().set_bit());
+			writeln!(tx, "ipxfr").ok();
+		}
+
+		// HCINT
+		if otg_fs_global.gintsts.read().hcint().bit() {
+			trigger_pin.set_low();
+			let haint = otg_fs_host.haint.read().bits();
+			writeln!(tx, "#{} hcint (haint = {:08x})", frame_number, haint).ok();
+			for i in 0..8 {
+				if haint & (1 << i) != 0 {
+					writeln!(tx, "hcint{} = {:08x}", i, otg_fs_host.hcintx(i).read().bits());
+					otg_fs_host.hcintx(i).write(|w| w.bits(!0));
+					writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+				}
+			}
+		}
+	}
+}
+
+struct SleepFuture {
+	// TODO: check systick against end time.
+}
+
 trait Fnord {
-	fn hcintx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0;
-	fn hccharx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0;
-	fn hcintmskx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0;
-	fn hctsizx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0;
+	fn hcintx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0;
+	fn hccharx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0;
+	fn hcintmskx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0;
+	fn hctsizx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0;
 }
 
 impl Fnord for stm32f4xx_hal::pac::OTG_FS_HOST {
-	fn hcintx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0 {
+	fn hcintx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCINT0 = &self.hcint0;
 		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
 	}
-	fn hcintmskx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0 {
+	fn hcintmskx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0 = &self.hcintmsk0;
 		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
 	}
-	fn hctsizx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0 {
+	fn hctsizx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0 = &self.hctsiz0;
 		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
 	}
-	fn hccharx(&self, i: u32) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0 {
+	fn hccharx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0 = &self.hcchar0;
 		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
