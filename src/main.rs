@@ -3,10 +3,9 @@
 #![no_std]
 
 use core::future::Future;
-use core::pin::Pin;
-use core::{cell::RefCell, ops::Generator};
+pub(crate) use core::pin::Pin;
+use core::cell::RefCell;
 
-use core::convert::TryInto;
 // Halt on panic
 use panic_halt as _; // panic handler
 
@@ -360,17 +359,15 @@ fn main() -> ! {
 		stm32::Peripherals::take(),
 		cortex_m::peripheral::Peripherals::take(),
 	) {
-		// Set up the system clock. We want to run at 48MHz for this one.
 		let rcc = dp.RCC.constrain();
 		let clocks = rcc.cfgr.use_hse(25.mhz()).sysclk(84.mhz()).freeze();
 
-		// Set up the LED. On the Nucleo-446RE it's connected to pin PA5.
-		let gpioc = dp.GPIOC.split();
-		let mut led = gpioc.pc13.into_push_pull_output();
+		//let gpioc = dp.GPIOC.split();
+		//let mut led = gpioc.pc13.into_push_pull_output();
 
 		let gpioa = dp.GPIOA.split();
-		let dm_pin = gpioa.pa11.into_alternate_af10().internal_pull_down(true);
-		let dp_pin = gpioa.pa12.into_alternate_af10().internal_pull_down(true);
+		let dm_pin = gpioa.pa11.into_alternate::<10>().internal_pull_down(true);
+		let dp_pin = gpioa.pa12.into_alternate::<10>().internal_pull_down(true);
 
 		// Create a delay abstraction based on SysTick
 		let mut delay = hal::delay::Delay::new(cp.SYST, &clocks);
@@ -380,10 +377,9 @@ fn main() -> ! {
 		trigger_pin.set_low();
 
 		// Configure the USART
-		let gpio_tx = gpioa.pa9.into_alternate_af7();
-		let gpio_rx = gpioa.pa10.into_alternate_af7();
-
-		let serial = serial::Serial::usart1(
+		let gpio_tx = gpioa.pa9.into_alternate();
+		let gpio_rx = gpioa.pa10.into_alternate();
+		let serial = serial::Serial::new(
 			dp.USART1,
 			(gpio_tx, gpio_rx),
 			serial::config::Config::default().baudrate(115200.bps()),
@@ -395,8 +391,6 @@ fn main() -> ! {
 
 		let otg_fs_global = dp.OTG_FS_GLOBAL;
 		let otg_fs_host = dp.OTG_FS_HOST;
-
-		let mut tx2 = unsafe { core::ptr::read(&tx) };
 
 		unsafe {
 			// enable OTG clock
@@ -549,7 +543,7 @@ fn main() -> ! {
 					if otg_fs_global.gintsts.read().sof().bit() {
 						otg_fs_global.gintsts.write(|w| w.sof().set_bit());
 						//write!(tx, "{:8} {:08x}\r", sofcount, otg_fs_host.hcchar0.read().bits());
-						write!(tx, "{:8} {:08x} {:08x}\r", sofcount, otg_fs_host.hfnum.read().bits(), otg_fs_global.gnptxsts.read().bits());
+						write!(tx, "{:8} {:08x} {:08x}\r", sofcount, otg_fs_host.hfnum.read().bits(), otg_fs_global.gnptxsts.read().bits()).ok();
 						//writeln!(tx, "hprt = {:08x}", otg_fs_host.hprt.read().bits()).ok();
 						//write!(tx, "{:08x}\r", otg_fs_global.gintsts.read().bits());
 						sofcount += 1;
@@ -633,10 +627,10 @@ fn main() -> ! {
 								.eptyp().bits(0) // 0 == control
 								.mpsiz().bits(64)
 							);
-							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
+							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits()).ok();
 
 							trigger_pin.set_high();
-							unsafe {
+							{
 								// NOTE: it does not matter where to write in the area 0x50001000 to 0x50001FFF. You can write your four-byte-chunks in ascending address order
 								// (as memcpy would do), but you can also write them all to the same address (e.g. 0x50001000) or in descending addresses. I.e. reverse memcpy
 								// would *not* cause the same result as memcpy
@@ -656,8 +650,7 @@ fn main() -> ! {
 								otg_fs_host.hcchar0.modify(|_, w| w.chena().set_bit());
 								core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
 							}
-							while otg_fs_host.hcchar0.read().chena().bit() {
-							}
+							while otg_fs_host.hcchar0.read().chena().bit() {}
 							trigger_pin.set_low();
 
 							otg_fs_host.hctsiz0.modify(|_, w| w
@@ -678,11 +671,11 @@ fn main() -> ! {
 							//core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
 					
 							while otg_fs_host.hcchar0.read().chena().bit() {
-								writeln!(tx, "waiting for chena to become 0");
+								writeln!(tx, "waiting for chena to become 0").ok();
 								while !otg_fs_global.gintsts.read().rxflvl().bit() {
 									//writeln!(tx, "waiting for rxflvl");
 								}
-								writeln!(tx, "gotcha");
+								writeln!(tx, "gotcha").ok();
 								while otg_fs_global.gintsts.read().rxflvl().bit() { // FIXME duplicated code
 									let rxstsp = otg_fs_global.grxstsp_host().read();
 									writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
@@ -723,9 +716,7 @@ fn main() -> ! {
 								18, 0, // length
 							];
 
-							unsafe {
-								core::ptr::write_volatile((0x50002000) as *mut [u8; 8], get_descriptor_packet);
-							}
+							core::ptr::write_volatile((0x50002000) as *mut [u8; 8], get_descriptor_packet);
 
 							otg_fs_host.hcchar1.modify(|_, w| w.chena().set_bit());
 
@@ -750,11 +741,11 @@ fn main() -> ! {
 							//core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
 					
 							//while otg_fs_host.hcchar1.read().chena().bit() {
-								writeln!(tx, "waiting for chena to become 0");
+								writeln!(tx, "waiting for chena to become 0").ok();
 								while !otg_fs_global.gintsts.read().rxflvl().bit() {
-									writeln!(tx, "waiting for rxflvl");
+									writeln!(tx, "waiting for rxflvl").ok();
 								}
-								writeln!(tx, "gotcha");
+								writeln!(tx, "gotcha").ok();
 								while otg_fs_global.gintsts.read().rxflvl().bit() { // FIXME duplicated code
 									let rxstsp = otg_fs_global.grxstsp_host().read();
 									writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
@@ -766,16 +757,16 @@ fn main() -> ! {
 											_ => "(unknown)"
 										}
 									).ok();
-									for i in (0..20).step_by(4) {
-										write!(tx, "{:08x} ", core::ptr::read_volatile((0x50002000) as *mut u32));
+									for _ in (0..20).step_by(4) {
+										write!(tx, "{:08x} ", core::ptr::read_volatile((0x50002000) as *mut u32)).ok();
 									}
-									writeln!(tx, ".");
+									writeln!(tx, ".").ok();
 									// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
 								}
 							//}
 
 
-							writeln!(tx, "done");
+							writeln!(tx, "done").ok();
 							
 						}
 
@@ -817,9 +808,9 @@ fn main() -> ! {
 						writeln!(tx, "#{} hcint (haint = {:08x})", frame_number, haint).ok();
 						for i in 0..8 {
 							if haint & (1 << i) != 0 {
-								writeln!(tx, "hcint{} = {:08x}", i, otg_fs_host.hcintx(i).read().bits());
+								writeln!(tx, "hcint{} = {:08x}", i, otg_fs_host.hcintx(i).read().bits()).ok();
 								otg_fs_host.hcintx(i).write(|w| w.bits(!0));
-								writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+								writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit()).ok();
 							}
 						}
 					}
