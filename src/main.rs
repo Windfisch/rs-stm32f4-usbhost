@@ -54,17 +54,37 @@ struct UsbGlobals {
 	usb_host: &'static stm32f4xx_hal::pac::OTG_FS_HOST,
 }
 
+#[derive(Clone, Copy)]
+enum DataPid {
+	Data0 = 0,
+	Data2 = 1,
+	Data1 = 2,
+	MdataSetup = 3
+}
+
 struct UsbOutTransfer<'a> {
 	data: &'a [u8],
 	state: TransferState,
 	globals: &'a RefCell<UsbGlobals>,
+	endpoint_type: EndpointType,
+	endpoint_number: u8,
+	device_address: u8,
+	data_pid: DataPid,
+	packet_size: u16,
+	is_lowspeed: bool
 }
 
 struct UsbInTransfer<'a> {
 	data: &'a mut [u8],
 	state: TransferState,
 	globals: &'a RefCell<UsbGlobals>,
-	rx_pointer: usize
+	rx_pointer: usize,
+	endpoint_type: EndpointType,
+	endpoint_number: u8,
+	device_address: u8,
+	data_pid: DataPid,
+	packet_size: u16,
+	is_lowspeed: bool
 }
 
 enum UsbError {
@@ -84,19 +104,19 @@ impl Future for UsbInTransfer<'_> {
 				let available_channel = (0..8).find(|i| usb_host.hccharx(*i).read().chena().bit_is_clear());
 				if let Some(channel) = available_channel {
 					unsafe {
-						usb_host.hctsizx(channel).modify(|_, w| w
-							.dpid().bits(2)
-							.pktcnt().bits(1)
-							.xfrsiz().bits(18)
+						usb_host.hctsizx(channel).write(|w| w
+							.dpid().bits(self.data_pid as u8)
+							.pktcnt().bits(div_ceil(self.data.len(), self.packet_size as usize) as u16)
+							.xfrsiz().bits(self.data.len() as u32)
 						);
-						usb_host.hcchar0.modify(|_, w| w
-							.dad().bits(1)
+						usb_host.hccharx(channel).write(|w| w
+							.dad().bits(self.device_address)
 							.mcnt().bits(1)
 							.epdir().set_bit()
-							//.lsdev().set_bit() // TODO
-							.epnum().bits(0) // 1 == in
-							.eptyp().bits(0) // 0 == control
-							.mpsiz().bits(64)
+							.lsdev().bit(self.is_lowspeed)
+							.epnum().bits(self.endpoint_number)
+							.eptyp().bits(self.endpoint_type as u8)
+							.mpsiz().bits(self.packet_size)
 							.chena().set_bit()
 						);
 					}
@@ -105,40 +125,72 @@ impl Future for UsbInTransfer<'_> {
 				}
 			}
 			TransferState::WaitingForTransferToFinish(channel) => {
-				if usb_host.hccharx(channel).read().chena().bit_is_clear() {
-					return Poll::Ready(Ok(()));
-				}
-				else {
-					if let Some(ref grxsts) = globals.grxsts {
-						if grxsts.chnum().bits() == channel {
-							debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {}", usb_host.hfnum.read().frnum().bits(), grxsts.chnum().bits(), grxsts.dpid().bits(), grxsts.bcnt().bits(), grxsts.pktsts().bits(),
-								match grxsts.pktsts().bits() { // TODO FIXME handle properly, return Err()
-									2 => "IN data packet received",
-									3 => "IN transfer completed",
-									5 => "Data toggle error",
-									7 => "Channel halted",
-									_ => "(unknown)"
+				if let Some(ref grxsts) = globals.grxsts {
+					if grxsts.chnum().bits() == channel {
+						let packet_status = PacketStatus::from(grxsts.pktsts().bits());
+						debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {:?}", usb_host.hfnum.read().frnum().bits(), grxsts.chnum().bits(), grxsts.dpid().bits(), grxsts.bcnt().bits(), grxsts.pktsts().bits(), packet_status
+						);
+
+						/*
+						if (error_condition) {
+							// FIXME: cleanup
+							return Poll::Ready(Err(TODO));
+						}*/
+
+						match packet_status {
+							PacketStatus::InDataPacketReceived => {
+								let len = grxsts.bcnt().bits() as usize;
+								for i in (0..len).step_by(4) {
+									let fifo_word = unsafe { core::ptr::read_volatile((0x50001000 + (channel as usize) * 0x1000) as *mut [u8; 4]) };
+									let offset = self.rx_pointer + i;
+									let remaining = usize::min(len - i, 4);
+									self.data[offset..(offset + remaining)].copy_from_slice(&fifo_word[0..remaining]);
 								}
-							);
-
-							/*
-							if (error_condition) {
-								// FIXME: cleanup
-								return Poll::Ready(Err(TODO));
-							}*/
-
-							assert!(grxsts.bcnt().bits() % 4 == 0);
-							for i in (0 .. (grxsts.bcnt().bits() as usize)).step_by(4) {
-								let fifo_word = unsafe { core::ptr::read_volatile((0x50001000 + (channel as usize) * 0x1000) as *mut [u8; 4]) };
-								let offset = self.rx_pointer + i;
-								self.data[offset..(offset + 4)].copy_from_slice(&fifo_word);
 							}
+							_ => {}
 						}
 					}
+				}
+				if usb_host.hccharx(channel).read().chena().bit_is_clear() {
+					return Poll::Ready(Ok(()));
 				}
 			}
 		}
 		return Poll::Pending;
+	}
+}
+
+#[derive(Copy, Clone)]
+enum EndpointType {
+	Control = 0,
+	Isochronous = 1,
+	Bulk = 2,
+	Interrupt = 3
+}
+
+fn div_ceil(a: usize, b: usize) -> usize {
+	(a+b-1)/b
+}
+
+#[derive(Copy, Clone, Debug)]
+enum PacketStatus {
+	InDataPacketReceived,
+	InTransferCompleted,
+	DataToggleError,
+	ChannelHalted,
+	Unknown
+}
+
+impl From<u8> for PacketStatus {
+	fn from(val: u8) -> PacketStatus {
+		use PacketStatus::*;
+		match val {
+			2 => InDataPacketReceived,
+			3 => InTransferCompleted,
+			5 => DataToggleError,
+			7 => ChannelHalted,
+			_ => Unknown
+		}
 	}
 }
 
@@ -153,24 +205,29 @@ impl Future for UsbOutTransfer<'_> {
 				let available_channel = (0..8).find(|i| usb_host.hccharx(*i).read().chena().bit_is_clear());
 				if let Some(channel) = available_channel {
 					unsafe {
-						usb_host.hctsizx(channel).modify(|_, w| w
-							.dpid().bits(3) // mdata. magically turns the OUT token into a SETUP token
-							.pktcnt().bits(1)
-							.xfrsiz().bits(8)
+						usb_host.hctsizx(channel).write(|w| w
+							.dpid().bits(self.data_pid as u8)
+							.pktcnt().bits(div_ceil(self.data.len(), self.packet_size as usize) as u16)
+							.xfrsiz().bits(self.data.len() as u32)
 						);
-						usb_host.hcchar0.modify(|_, w| w
-							.dad().bits(0)
+						usb_host.hccharx(channel).write(|w| w
+							.dad().bits(self.device_address)
 							.mcnt().bits(1)
 							.epdir().clear_bit()
-							//.lsdev().set_bit() // TODO
-							.epnum().bits(0) // 1 == in
-							.eptyp().bits(0) // 0 == control
-							.mpsiz().bits(64)
+							.lsdev().bit(self.is_lowspeed)
+							.epnum().bits(self.endpoint_number) // 1 == in
+							.eptyp().bits(self.endpoint_type as u8) // 0 == control
+							.mpsiz().bits(self.packet_size)
 							.chena().set_bit()
 						);
-						// TODO dunno if bytewise writes are allowed
-						core::slice::from_raw_parts_mut((0x50001000 + (channel as usize) * 0x1000) as *mut u8, self.data.len())
-							.copy_from_slice(self.data);
+
+						// we need to write word-wise into the fifo. excess bytes seem to be ignored. i.e.,
+						// to transmit 6 bytes, AA BB CC DD EE FF, we need to write 0xAABBCCDD and 0xEEFF4242.
+						for chunk in self.data.chunks(4) {
+							let mut tmp = [0; 4];
+							tmp[0..chunk.len()].copy_from_slice(chunk);
+							core::ptr::write_volatile((0x50001000 + (channel as usize) * 0x1000) as *mut [u8; 4], tmp);
+						}
 						//debugln!("gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
 					}
 
@@ -697,7 +754,7 @@ fn main() -> ! {
 							otg_fs_host.hctsiz1.modify(|_, w| w
 								.dpid().bits(3)
 								.pktcnt().bits(1)
-								.xfrsiz().bits(8)
+								.xfrsiz().bits(7)
 							);
 							otg_fs_host.hcchar1.modify(|_, w| w
 								.dad().bits(1)
