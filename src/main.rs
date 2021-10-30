@@ -1,6 +1,7 @@
-#![feature(generators, generator_trait)]
 #![no_main]
 #![no_std]
+
+mod null_waker;
 
 use core::future::Future;
 pub(crate) use core::pin::Pin;
@@ -221,8 +222,26 @@ impl Future for UsbOutTransfer<'_> {
 							.chena().set_bit()
 						);
 
-						// we need to write word-wise into the fifo. excess bytes seem to be ignored. i.e.,
-						// to transmit 6 bytes, AA BB CC DD EE FF, we need to write 0xAABBCCDD and 0xEEFF4242.
+						// NOTE: setting pktcnt correctly is *not* needed to send a packet.  Instead, always 
+						// ceil(xfrsiz / mpsiz) packets are sent; the first n-1 packets are mpsiz long, the last has the
+						// remaining length.  However, only after `pktcount` packets have been sent, a "transfer
+						// complete" interrupt is generated. So even if *sending* works without setting pktcount,
+						// getting notified after the send completes would not work.
+
+						// NOTE: the CHENA is pure user convenience. It does *not* control actual activation of the
+						// channel (which is triggered by writing enough words to the FIFO). But the application will
+						// clear this bit after successfully transmitting `pktcnt` packets, i.e. at the same time when
+						// the "transmission complete" interrupt is generated. If the user sets the bit, they can easily
+						// poll which channels are free; however, the user *could* implement this bookkeeping using the
+						// transmission complete interrupt with their own array, if they wanted to.
+
+						// NOTE: it does not matter where to write in the area 0x50001000 to 0x50001FFF. You can write
+						// your four-byte-chunks in ascending address order (as memcpy would do), but you can also write
+						// them all to the same address (e.g. 0x50001000) or in descending addresses. I.e. reverse
+						// memcpy would *not* cause the same result as memcpy.  we need to write word-wise into the
+						// fifo. excess bytes seem to be ignored. i.e., to transmit 6 bytes, AA BB CC DD EE FF, we need
+						// to write 0xAABBCCDD and 0xEEFF4242.
+
 						for chunk in self.data.chunks(4) {
 							let mut tmp = [0; 4];
 							tmp[0..chunk.len()].copy_from_slice(chunk);
@@ -659,8 +678,15 @@ fn main() -> ! {
 							}
 							
 							otg_fs_host.haintmsk.write(|w| w.bits(1<<0));
-							
-						
+			
+							let waker = null_waker::create();
+							let mut dummy_context = core::task::Context::from_waker(&waker);
+					
+							let globals = core::cell::RefCell::new(UsbGlobals {
+								grxsts: None,
+								usb_host: core::mem::transmute(&otg_fs_host) // FIXME FIXME FIXME FIXME FIXME!!!
+							});
+
 
 							let setup_packet = [
 								0x00u8, // device, standard, host to device
@@ -670,85 +696,61 @@ fn main() -> ! {
 								0x00, 0x00, // length
 							];
 
-							otg_fs_host.hctsiz0.modify(|_, w| w
-								.dpid().bits(3) // mdata. magically turns the OUT token into a SETUP token
-								.pktcnt().bits(1)
-								.xfrsiz().bits(8)
-							);
-							otg_fs_host.hcchar0.modify(|_, w| w
-								.dad().bits(0)
-								.mcnt().bits(1)
-								.epdir().clear_bit()
-								//.lsdev().set_bit() // TODO
-								.epnum().bits(0) // 1 == in
-								.eptyp().bits(0) // 0 == control
-								.mpsiz().bits(64)
-							);
-							writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits()).ok();
+							let mut fnord = UsbOutTransfer {
+								data: &setup_packet,
+								globals: &globals,
+								state: TransferState::WaitingForAvailableChannel,
+								endpoint_type: EndpointType::Control,
+								endpoint_number: 0,
+								device_address: 0,
+								data_pid: DataPid::MdataSetup,
+								packet_size: 64,
+								is_lowspeed: false
+							};
 
 							trigger_pin.set_high();
-							{
-								// NOTE: it does not matter where to write in the area 0x50001000 to 0x50001FFF. You can write your four-byte-chunks in ascending address order
-								// (as memcpy would do), but you can also write them all to the same address (e.g. 0x50001000) or in descending addresses. I.e. reverse memcpy
-								// would *not* cause the same result as memcpy
-								//core::ptr::write_volatile((0x50001f00) as *mut u32, 0xdeadbeef);
-								//writeln!(tx, "gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
-
-								// NOTE: setting pktcnt correctly is *not* needed to send a packet.
-								// Instead, always ceil(xfrsiz / mpsiz) packets are sent; the first n-1 packets are mpsiz long, the last has the remaining length.
-								// However, only after `pktcount` packets have been sent, a "transfer complete" interrupt is generated. So even if *sending* works
-								// without setting pktcount, getting notified after the send completes would not work.
-
-								// NOTE: the CHENA is pure user convenience. It does *not* control actual activation of the channel (which is triggered
-								// by writing enough words to the FIFO). But the application will clear this bit after successfully transmitting `pktcnt` packets,
-								// i.e. at the same time when the "transmission complete" interrupt is generated. If the user sets the bit, they can easily poll
-								// which channels are free; however, the user *could* implement this bookkeeping using the transmission complete interrupt with their
-								// own array, if they wanted to.
-								otg_fs_host.hcchar0.modify(|_, w| w.chena().set_bit());
-								core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
+							loop {
+								match core::pin::Pin::new(&mut fnord).poll(&mut dummy_context) {
+									core::task::Poll::Ready(_) => { break; }
+									core::task::Poll::Pending => { continue; }
+								}
 							}
-							while otg_fs_host.hcchar0.read().chena().bit() {}
 							trigger_pin.set_low();
+							
+							let mut zero_byte_buffer = [];
 
-							otg_fs_host.hctsiz0.modify(|_, w| w
-								.dpid().bits(2)
-								.pktcnt().bits(0)
-								.xfrsiz().bits(0)
-							);
-							otg_fs_host.hcchar0.modify(|_, w| w
-								.dad().bits(0)
-								.mcnt().bits(1)
-								.epdir().set_bit()
-								//.lsdev().set_bit() // TODO
-								.epnum().bits(0) // 1 == in
-								.eptyp().bits(0) // 0 == control
-								.mpsiz().bits(64)
-							);
-							otg_fs_host.hcchar0.modify(|_, w| w.chena().set_bit());
-							//core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
-					
-							while otg_fs_host.hcchar0.read().chena().bit() {
-								writeln!(tx, "waiting for chena to become 0").ok();
-								while !otg_fs_global.gintsts.read().rxflvl().bit() {
-									//writeln!(tx, "waiting for rxflvl");
+							let mut fnord = UsbInTransfer {
+								data: &mut zero_byte_buffer,
+								globals: &globals,
+								rx_pointer: 0,
+								state: TransferState::WaitingForAvailableChannel,
+								endpoint_type: EndpointType::Control,
+								endpoint_number: 0,
+								device_address: 0,
+								data_pid: DataPid::Data1,
+								packet_size: 64,
+								is_lowspeed: false
+							};
+
+							loop {
+								{
+									let mut globals = globals.borrow_mut();
+									globals.grxsts = None;
+									if otg_fs_global.gintsts.read().rxflvl().bit() {
+										globals.grxsts = Some(otg_fs_global.grxstsp_host().read());
+									}
 								}
-								writeln!(tx, "gotcha").ok();
-								while otg_fs_global.gintsts.read().rxflvl().bit() { // FIXME duplicated code
-									let rxstsp = otg_fs_global.grxstsp_host().read();
-									writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
-										match rxstsp.pktsts().bits() {
-											2 => "IN data packet received",
-											3 => "IN transfer completed",
-											5 => "Data toggle error",
-											7 => "Channel halted",
-											_ => "(unknown)"
-										}
-									).ok();
-									// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
+
+								match core::pin::Pin::new(&mut fnord).poll(&mut dummy_context) {
+									core::task::Poll::Ready(_) => { break; }
+									core::task::Poll::Pending => { continue; }
 								}
 							}
 
-							otg_fs_host.hcchar0.modify(|_, w| w.chdis().set_bit());
+
+							// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
+
+							//otg_fs_host.hcchar0.modify(|_, w| w.chdis().set_bit()); // FIXME is that needed??
 
 							trigger_pin.set_high();
 							otg_fs_host.hctsiz1.modify(|_, w| w
