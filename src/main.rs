@@ -687,49 +687,92 @@ fn main() -> ! {
 								usb_host: core::mem::transmute(&otg_fs_host) // FIXME FIXME FIXME FIXME FIXME!!!
 							});
 
+							let mut async_block = async {
+								let setup_packet = [
+									0x00u8, // device, standard, host to device
+									0x05, // set address
+									0x01, 0x00, // address 1
+									0x00, 0x00, // index
+									0x00, 0x00, // length
+								];
 
-							let setup_packet = [
-								0x00u8, // device, standard, host to device
-								0x05, // set address
-								0x01, 0x00, // address 1
-								0x00, 0x00, // index
-								0x00, 0x00, // length
-							];
+								let mut fnord = UsbOutTransfer {
+									data: &setup_packet,
+									globals: &globals,
+									state: TransferState::WaitingForAvailableChannel,
+									endpoint_type: EndpointType::Control,
+									endpoint_number: 0,
+									device_address: 0,
+									data_pid: DataPid::MdataSetup,
+									packet_size: 64,
+									is_lowspeed: false
+								};
 
-							let mut fnord = UsbOutTransfer {
-								data: &setup_packet,
-								globals: &globals,
-								state: TransferState::WaitingForAvailableChannel,
-								endpoint_type: EndpointType::Control,
-								endpoint_number: 0,
-								device_address: 0,
-								data_pid: DataPid::MdataSetup,
-								packet_size: 64,
-								is_lowspeed: false
-							};
+								trigger_pin.set_high();
+								fnord.await;
+								trigger_pin.set_low();
+								
+								let mut zero_byte_buffer = [];
 
-							trigger_pin.set_high();
-							loop {
-								match core::pin::Pin::new(&mut fnord).poll(&mut dummy_context) {
-									core::task::Poll::Ready(_) => { break; }
-									core::task::Poll::Pending => { continue; }
-								}
-							}
-							trigger_pin.set_low();
+								let mut fnord = UsbInTransfer {
+									data: &mut zero_byte_buffer,
+									globals: &globals,
+									rx_pointer: 0,
+									state: TransferState::WaitingForAvailableChannel,
+									endpoint_type: EndpointType::Control,
+									endpoint_number: 0,
+									device_address: 0,
+									data_pid: DataPid::Data1,
+									packet_size: 64,
+									is_lowspeed: false
+								};
+
+								fnord.await;
 							
-							let mut zero_byte_buffer = [];
 
-							let mut fnord = UsbInTransfer {
-								data: &mut zero_byte_buffer,
-								globals: &globals,
-								rx_pointer: 0,
-								state: TransferState::WaitingForAvailableChannel,
-								endpoint_type: EndpointType::Control,
-								endpoint_number: 0,
-								device_address: 0,
-								data_pid: DataPid::Data1,
-								packet_size: 64,
-								is_lowspeed: false
+								let get_descriptor_packet = [
+									0x80u8, // device, standard, host to device
+									0x06, // get descriptor
+									0x00, 0x01, // descriptor 1
+									0x00, 0x00, // index
+									18, 0, // length
+								];
+								let mut fnord = UsbOutTransfer {
+									data: &get_descriptor_packet,
+									globals: &globals,
+									state: TransferState::WaitingForAvailableChannel,
+									endpoint_type: EndpointType::Control,
+									endpoint_number: 0,
+									device_address: 1,
+									data_pid: DataPid::MdataSetup,
+									packet_size: 64,
+									is_lowspeed: false
+								};
+								trigger_pin.set_high();
+								fnord.await;
+
+								let mut descriptor_buffer = [0; 18];
+
+								let mut fnord = UsbInTransfer {
+									data: &mut descriptor_buffer,
+									globals: &globals,
+									rx_pointer: 0,
+									state: TransferState::WaitingForAvailableChannel,
+									endpoint_type: EndpointType::Control,
+									endpoint_number: 0,
+									device_address: 1,
+									data_pid: DataPid::Data1,
+									packet_size: 64,
+									is_lowspeed: false
+								};
+
+								fnord.await;
+								
+								debug!("Descriptor: ");
+								for byte in descriptor_buffer {
+									debug!("{:02X} ", byte);
+								}
+								debugln!("");
 							};
 
 							loop {
@@ -741,89 +784,18 @@ fn main() -> ! {
 									}
 								}
 
-								match core::pin::Pin::new(&mut fnord).poll(&mut dummy_context) {
+								match unsafe {core::pin::Pin::new_unchecked(&mut async_block)}.poll(&mut dummy_context) {
 									core::task::Poll::Ready(_) => { break; }
 									core::task::Poll::Pending => { continue; }
 								}
 							}
 
+							core::mem::drop(async_block);
+
 
 							// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
 
 							//otg_fs_host.hcchar0.modify(|_, w| w.chdis().set_bit()); // FIXME is that needed??
-
-							trigger_pin.set_high();
-							otg_fs_host.hctsiz1.modify(|_, w| w
-								.dpid().bits(3)
-								.pktcnt().bits(1)
-								.xfrsiz().bits(7)
-							);
-							otg_fs_host.hcchar1.modify(|_, w| w
-								.dad().bits(1)
-								.mcnt().bits(1)
-								.epdir().clear_bit()
-								//.lsdev().set_bit() // TODO
-								.epnum().bits(0) // 1 == in
-								.eptyp().bits(0) // 0 == control
-								.mpsiz().bits(64)
-							);
-							let get_descriptor_packet = [
-								0x80u8, // device, standard, host to device
-								0x06, // get descriptor
-								0x00, 0x01, // descriptor 1
-								0x00, 0x00, // index
-								18, 0, // length
-							];
-
-							core::ptr::write_volatile((0x50002000) as *mut [u8; 8], get_descriptor_packet);
-
-							otg_fs_host.hcchar1.modify(|_, w| w.chena().set_bit());
-
-							while otg_fs_host.hcchar1.read().chena().bit() {
-							}
-							
-							otg_fs_host.hctsiz1.modify(|_, w| w
-								.dpid().bits(2)
-								.pktcnt().bits(1)
-								.xfrsiz().bits(18)
-							);
-							otg_fs_host.hcchar1.modify(|_, w| w
-								.dad().bits(1)
-								.mcnt().bits(1)
-								.epdir().set_bit()
-								//.lsdev().set_bit() // TODO
-								.epnum().bits(0) // 1 == in
-								.eptyp().bits(0) // 0 == control
-								.mpsiz().bits(64)
-							);
-							otg_fs_host.hcchar1.modify(|_, w| w.chena().set_bit());
-							//core::ptr::write_volatile((0x50001000) as *mut [u8; 8], setup_packet);
-					
-							//while otg_fs_host.hcchar1.read().chena().bit() {
-								writeln!(tx, "waiting for chena to become 0").ok();
-								while !otg_fs_global.gintsts.read().rxflvl().bit() {
-									writeln!(tx, "waiting for rxflvl").ok();
-								}
-								writeln!(tx, "gotcha").ok();
-								while otg_fs_global.gintsts.read().rxflvl().bit() { // FIXME duplicated code
-									let rxstsp = otg_fs_global.grxstsp_host().read();
-									writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
-										match rxstsp.pktsts().bits() {
-											2 => "IN data packet received",
-											3 => "IN transfer completed",
-											5 => "Data toggle error",
-											7 => "Channel halted",
-											_ => "(unknown)"
-										}
-									).ok();
-									for _ in (0..20).step_by(4) {
-										write!(tx, "{:08x} ", core::ptr::read_volatile((0x50002000) as *mut u32)).ok();
-									}
-									writeln!(tx, ".").ok();
-									// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
-								}
-							//}
-
 
 							writeln!(tx, "done").ok();
 							
