@@ -24,6 +24,7 @@ use core::task::{Poll, Context};
 macro_rules! debug {
 	($($arg:tt)*) => {{
 		use core::mem::MaybeUninit;
+		#[allow(unused_unsafe)]
 		let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
 		write!(tx, $($arg)*).ok();
 	}}
@@ -32,6 +33,7 @@ macro_rules! debug {
 macro_rules! debugln {
 	($($arg:tt)*) => {{
 		use core::mem::MaybeUninit;
+		#[allow(unused_unsafe)]
 		let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
 		writeln!(tx, $($arg)*).ok();
 	}}
@@ -262,137 +264,6 @@ impl Future for UsbOutTransfer<'_> {
 		return Poll::Pending;
 	}
 }
-/*
-fn loop_when_connected() {
-	loop {
-		globals.grxsts = None;
-
-		if otg_fs_global.gintsts.read().sof().bit() {
-			otg_fs_global.gintsts.write(|w| w.sof().set_bit());
-			//debug!("{:8} {:08x}\r", sofcount, otg_fs_host.hcchar0.read().bits());
-			debug!("{:8} {:08x} {:08x}\r", sofcount, otg_fs_host.hfnum.read().bits(), otg_fs_global.gnptxsts.read().bits());
-			//debugln!("hprt = {:08x}", otg_fs_host.hprt.read().bits());
-			//debug!("{:08x}\r", otg_fs_global.gintsts.read().bits());
-			sofcount += 1;
-		}
-
-		let frame_number = otg_fs_host.hfnum.read().frnum().bits();
-
-		while otg_fs_global.gintsts.read().srqint().bit() {
-			debugln!("srqint");
-			otg_fs_global.gintsts.write(|w| w.srqint().set_bit());
-			// TODO do things
-		}
-
-		while otg_fs_global.gintsts.read().rxflvl().bit() {
-			globals.grxsts = Some(otg_fs_global.grxstsp_host().read());
-
-			debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
-				match rxstsp.pktsts().bits() {
-					2 => "IN data packet received",
-					3 => "IN transfer completed",
-					5 => "Data toggle error",
-					7 => "Channel halted",
-					_ => "(unknown)"
-				}
-			).ok();
-		}
-
-		// OTGINT
-		if otg_fs_global.gintsts.read().otgint().bit() {
-			let val = otg_fs_global.gotgint.read().bits();
-			debugln!("otg {:08x}", val);
-			otg_fs_global.gotgint.modify(|_,w| w.bits(val));
-		}
-		
-		// HPRTINT
-		if otg_fs_global.gintsts.read().hprtint().bit() {
-			let val = otg_fs_host.hprt.read();
-			debugln!("hprt {:08x}", val.bits());
-
-			if val.penchng().bit() {
-				debugln!("#{}, penchng, port enabled is {}", frame_number, val.pena().bit());
-
-				for i in 0..=1 {
-					otg_fs_host.hcintx(i).write(|w| w.bits(!0));
-					otg_fs_host.hcintmskx(i).write(|w| w
-						.xfrcm().set_bit()
-						.chhm().set_bit()
-						.stallm().set_bit()
-						.nakm().set_bit()
-						.ackm().set_bit()
-						.txerrm().set_bit()
-						.bberrm().set_bit()
-						.frmorm().set_bit()
-						.dterrm().set_bit()
-					);
-				}
-				
-				otg_fs_host.haintmsk.write(|w| w.bits(1<<0));
-				
-			
-
-				let setup_packet = [
-					0x00u8, // device, standard, host to device
-					0x05, // set address
-					0x01, 0x00, // address 1
-					0x00, 0x00, // index
-					0x00, 0x00, // length
-				];
-
-				// TODO: use fancy futures
-
-				debugln!("done");
-				
-			}
-
-			if val.pocchng().bit() {
-				debugln!("overcurrent");
-			}
-
-			if val.pcdet().bit() {
-				debugln!("port connect detected (pcdet)");
-			}
-	
-			otg_fs_host.hprt.modify(|r,w| w.bits(r.bits() & !4)); // do not set PENA???
-		}
-
-		// DISCINT
-		if otg_fs_global.gintsts.read().discint().bit() {
-			otg_fs_global.gintsts.write(|w| w.discint().set_bit());
-			debugln!("disconnect (discint)");
-			yield Some(UsbLoop::Disconnected);
-			break;
-		}
-
-		// MMIS
-		if otg_fs_global.gintsts.read().mmis().bit() {
-			otg_fs_global.gintsts.write(|w| w.mmis().set_bit());
-			debugln!("mode mismatch (mmis)");
-		}
-
-		// IPXFR
-		if otg_fs_global.gintsts.read().ipxfr_incompisoout().bit(){
-			otg_fs_global.gintsts.write(|w| w.ipxfr_incompisoout().set_bit());
-			debugln!("ipxfr");
-		}
-
-		// HCINT
-		if otg_fs_global.gintsts.read().hcint().bit() {
-			trigger_pin.set_low();
-			let haint = otg_fs_host.haint.read().bits();
-			debugln!("#{} hcint (haint = {:08x})", frame_number, haint);
-			for i in 0..8 {
-				if haint & (1 << i) != 0 {
-					debugln!("hcint{} = {:08x}", i, otg_fs_host.hcintx(i).read().bits());
-					otg_fs_host.hcintx(i).write(|w| w.bits(!0));
-					debugln!("hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
-				}
-			}
-		}
-	}
-}
-*/
 
 struct SleepFuture {
 	// TODO: check systick against end time.
@@ -569,35 +440,6 @@ fn main() -> ! {
 
 				otg_fs_global.gintmsk.modify(|_,w| w.nptxfem().set_bit());
 
-//				const N_CHANNELS: u32 = 8;
-//				otg_fs_host.haintmsk.write(|w| w.bits( (1<<N_CHANNELS)-1 ));
-
-/*
-				macro_rules! hcint {
-					($HCINT:ident, $HCINTMSK:ident) => {
-							otg_fs_host.$HCINTMSK.write(|w| w
-								.xfrcm().set_bit()
-								.chhm().set_bit()
-								.stallm().set_bit()
-								.nakm().set_bit()
-								.ackm().set_bit()
-								.txerrm().set_bit()
-								.bberrm().set_bit()
-								.frmorm().set_bit()
-								.dterrm().set_bit()
-							);
-							otg_fs_host.$HCINT.modify(|r,w| w.bits(r.bits()));
-					}
-				}
-				hcint!(hcint0, hcintmsk0);
-				hcint!(hcint1, hcintmsk1);
-				hcint!(hcint2, hcintmsk2);
-				hcint!(hcint3, hcintmsk3);
-				hcint!(hcint4, hcintmsk4);
-				hcint!(hcint5, hcintmsk5);
-				hcint!(hcint6, hcintmsk6);
-				hcint!(hcint7, hcintmsk7);
-*/
 				// "host programming model"/"channel initialization"
 
 
@@ -696,7 +538,7 @@ fn main() -> ! {
 									0x00, 0x00, // length
 								];
 
-								let mut fnord = UsbOutTransfer {
+								let fnord = UsbOutTransfer {
 									data: &setup_packet,
 									globals: &globals,
 									state: TransferState::WaitingForAvailableChannel,
@@ -714,7 +556,7 @@ fn main() -> ! {
 								
 								let mut zero_byte_buffer = [];
 
-								let mut fnord = UsbInTransfer {
+								let fnord = UsbInTransfer {
 									data: &mut zero_byte_buffer,
 									globals: &globals,
 									rx_pointer: 0,
@@ -737,7 +579,7 @@ fn main() -> ! {
 									0x00, 0x00, // index
 									18, 0, // length
 								];
-								let mut fnord = UsbOutTransfer {
+								let fnord = UsbOutTransfer {
 									data: &get_descriptor_packet,
 									globals: &globals,
 									state: TransferState::WaitingForAvailableChannel,
@@ -753,7 +595,7 @@ fn main() -> ! {
 
 								let mut descriptor_buffer = [0; 18];
 
-								let mut fnord = UsbInTransfer {
+								let fnord = UsbInTransfer {
 									data: &mut descriptor_buffer,
 									globals: &globals,
 									rx_pointer: 0,
@@ -795,7 +637,7 @@ fn main() -> ! {
 
 							// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
 
-							//otg_fs_host.hcchar0.modify(|_, w| w.chdis().set_bit()); // FIXME is that needed??
+							//otg_fs_host.hcchar0.modify(|_, w| w.chdis().set_bit()); // FIXME seems unneeded
 
 							writeln!(tx, "done").ok();
 							
