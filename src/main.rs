@@ -409,22 +409,22 @@ impl Fnord for stm32f4xx_hal::pac::OTG_FS_HOST {
 	fn hcintx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCINT0 = &self.hcint0;
-		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
+		unsafe { &*((ptr as usize).wrapping_add(i as usize * 0x20) as *const stm32f4xx_hal::stm32::otg_fs_host::HCINT0) }
 	}
 	fn hcintmskx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0 = &self.hcintmsk0;
-		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
+		unsafe { &*((ptr as usize).wrapping_add(i as usize * 0x20) as *const stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0) }
 	}
 	fn hctsizx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0 = &self.hctsiz0;
-		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
+		unsafe { &*((ptr as usize).wrapping_add(i as usize * 0x20) as *const stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0) }
 	}
 	fn hccharx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0 = &self.hcchar0;
-		unsafe { &*(ptr.wrapping_add(i as usize * 0x20)) }
+		unsafe { &*((ptr as usize).wrapping_add(i as usize * 0x20) as *const stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0) }
 	}
 }
 
@@ -662,7 +662,7 @@ fn main() -> ! {
 						if val.penchng().bit() {
 							writeln!(tx, "#{}, penchng, port enabled is {}", frame_number, val.pena().bit()).ok();
 
-							for i in 0..=1 {
+							for i in 0..8 {
 								otg_fs_host.hcintx(i).write(|w| w.bits(!0));
 								otg_fs_host.hcintmskx(i).write(|w| w
 									.xfrcm().set_bit()
@@ -677,7 +677,7 @@ fn main() -> ! {
 								);
 							}
 							
-							otg_fs_host.haintmsk.write(|w| w.bits(1<<0));
+							otg_fs_host.haintmsk.write(|w| w.bits(0xFFFF));
 			
 							let waker = null_waker::create();
 							let mut dummy_context = core::task::Context::from_waker(&waker);
