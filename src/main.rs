@@ -74,7 +74,8 @@ struct UsbOutTransfer<'a> {
 	device_address: u8,
 	data_pid: DataPid,
 	packet_size: u16,
-	is_lowspeed: bool
+	is_lowspeed: bool,
+	last_error: Option<TransferError>
 }
 
 struct UsbInTransfer<'a> {
@@ -87,18 +88,25 @@ struct UsbInTransfer<'a> {
 	device_address: u8,
 	data_pid: DataPid,
 	packet_size: u16,
-	is_lowspeed: bool
+	is_lowspeed: bool,
+	last_error: Option<TransferError>
 }
 
-enum UsbError {
+#[derive(Copy, Clone, Debug)]
+enum TransferError {
 	DataToggleError,
+	FrameOverrun,
+	BabbleError,
+	TransactionError,
+	Nak,
+	Stall,
 	Unknown
 }
 
 impl Future for UsbInTransfer<'_> {
-	type Output = Result<(), UsbError>;
+	type Output = Result<(), TransferError>;
 
-	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), UsbError>> {
+	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), TransferError>> {
 		let globals = self.globals.borrow_mut();
 		let usb_host = globals.usb_host;
 		//let tx = self.globals.tx;
@@ -154,8 +162,28 @@ impl Future for UsbInTransfer<'_> {
 						}
 					}
 				}
-				if usb_host.hccharx(channel).read().chena().bit_is_clear() {
+				let hcint = usb_host.hcintx(channel).read();
+				usb_host.hcintx(channel).write(|w| unsafe { w.bits(!0) } );
+				
+				let error =
+					if hcint.bberr().bit() { Some(TransferError::BabbleError) }
+					else if hcint.dterr().bit() { Some(TransferError::DataToggleError) }
+					else if hcint.frmor().bit() { Some(TransferError::FrameOverrun) }
+					else if hcint.stall().bit() { Some(TransferError::Stall) }
+					else if hcint.txerr().bit() { Some(TransferError::TransactionError) }
+					else if hcint.nak().bit() { Some(TransferError::Nak) }
+					else { None };
+
+				if error.is_some() {
+					usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
+				}
+
+				//FIXME is that really wrong? if usb_host.hccharx(channel).read().chena().bit_is_clear() {
+				if hcint.xfrc().bit_is_set() && self.last_error.is_none() {
 					return Poll::Ready(Ok(()));
+				}
+				else if hcint.xfrc().bit_is_set() || hcint.chh().bit_is_set() {
+					return Poll::Ready(Err(self.last_error.unwrap_or(TransferError::Unknown)));
 				}
 			}
 		}
@@ -198,9 +226,9 @@ impl From<u8> for PacketStatus {
 }
 
 impl Future for UsbOutTransfer<'_> {
-	type Output = ();
+	type Output = Result<(), TransferError>;
 
-	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
 		let globals = self.globals.borrow_mut();
 		let usb_host = globals.usb_host;
 		match self.state {
@@ -243,7 +271,8 @@ impl Future for UsbOutTransfer<'_> {
 						// memcpy would *not* cause the same result as memcpy.  we need to write word-wise into the
 						// fifo. excess bytes seem to be ignored. i.e., to transmit 6 bytes, AA BB CC DD EE FF, we need
 						// to write 0xAABBCCDD and 0xEEFF4242.
-
+						
+						// FIXME ensure the fifo has enough space!
 						for chunk in self.data.chunks(4) {
 							let mut tmp = [0; 4];
 							tmp[0..chunk.len()].copy_from_slice(chunk);
@@ -256,8 +285,28 @@ impl Future for UsbOutTransfer<'_> {
 				}
 			}
 			TransferState::WaitingForTransferToFinish(channel) => {
-				if usb_host.hccharx(channel).read().chena().bit_is_clear() {
-					return Poll::Ready(());
+				let hcint = usb_host.hcintx(channel).read();
+				usb_host.hcintx(channel).write(|w| unsafe { w.bits(!0) } );
+				
+				let error =
+					if hcint.bberr().bit() { Some(TransferError::BabbleError) }
+					else if hcint.dterr().bit() { Some(TransferError::DataToggleError) }
+					else if hcint.frmor().bit() { Some(TransferError::FrameOverrun) }
+					else if hcint.stall().bit() { Some(TransferError::Stall) }
+					else if hcint.txerr().bit() { Some(TransferError::TransactionError) }
+					else if hcint.nak().bit() { Some(TransferError::Nak) }
+					else { None };
+
+				if error.is_some() {
+					usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
+				}
+
+				//FIXME is that really wrong? if usb_host.hccharx(channel).read().chena().bit_is_clear() {
+				if hcint.xfrc().bit_is_set() && self.last_error.is_none() {
+					return Poll::Ready(Ok(()));
+				}
+				else if hcint.xfrc().bit_is_set() || hcint.chh().bit_is_set() {
+					return Poll::Ready(Err(self.last_error.unwrap_or(TransferError::Unknown)));
 				}
 			}
 		}
@@ -547,7 +596,8 @@ fn main() -> ! {
 									device_address: 0,
 									data_pid: DataPid::MdataSetup,
 									packet_size: 64,
-									is_lowspeed: false
+									is_lowspeed: false,
+									last_error: None
 								};
 
 								trigger_pin.set_high();
@@ -566,7 +616,8 @@ fn main() -> ! {
 									device_address: 0,
 									data_pid: DataPid::Data1,
 									packet_size: 64,
-									is_lowspeed: false
+									is_lowspeed: false,
+									last_error: None
 								};
 
 								fnord.await;
@@ -588,7 +639,8 @@ fn main() -> ! {
 									device_address: 1,
 									data_pid: DataPid::MdataSetup,
 									packet_size: 64,
-									is_lowspeed: false
+									is_lowspeed: false,
+									last_error: None
 								};
 								trigger_pin.set_high();
 								fnord.await;
@@ -605,7 +657,8 @@ fn main() -> ! {
 									device_address: 1,
 									data_pid: DataPid::Data1,
 									packet_size: 64,
-									is_lowspeed: false
+									is_lowspeed: false,
+									last_error: None
 								};
 
 								fnord.await;
