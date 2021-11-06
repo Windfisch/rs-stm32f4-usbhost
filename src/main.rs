@@ -175,7 +175,14 @@ impl Future for UsbInTransfer<'_> {
 					else { None };
 
 				if error.is_some() {
+					debugln!("Error in IN transfer {:?}, disabling channel", error.unwrap());
 					usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
+
+					if self.last_error.is_some() {
+						debugln!("WARNING: multiple errors in IN transfer");
+					}
+
+					self.last_error = error;
 				}
 
 				//FIXME is that really wrong? if usb_host.hccharx(channel).read().chena().bit_is_clear() {
@@ -298,7 +305,14 @@ impl Future for UsbOutTransfer<'_> {
 					else { None };
 
 				if error.is_some() {
+					debugln!("Error in OUT transfer {:?}, disabling channel", error.unwrap());
 					usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
+					
+					if self.last_error.is_some() {
+						debugln!("WARNING: multiple errors in OUT transfer");
+					}
+
+					self.last_error = error;
 				}
 
 				//FIXME is that really wrong? if usb_host.hccharx(channel).read().chena().bit_is_clear() {
@@ -587,81 +601,111 @@ fn main() -> ! {
 									0x00, 0x00, // length
 								];
 
-								let fnord = UsbOutTransfer {
-									data: &setup_packet,
-									globals: &globals,
-									state: TransferState::WaitingForAvailableChannel,
-									endpoint_type: EndpointType::Control,
-									endpoint_number: 0,
-									device_address: 0,
-									data_pid: DataPid::MdataSetup,
-									packet_size: 64,
-									is_lowspeed: false,
-									last_error: None
-								};
+								loop {
+									let fnord = UsbOutTransfer {
+										data: &setup_packet,
+										globals: &globals,
+										state: TransferState::WaitingForAvailableChannel,
+										endpoint_type: EndpointType::Control,
+										endpoint_number: 0,
+										device_address: 0,
+										data_pid: DataPid::MdataSetup,
+										packet_size: 64,
+										is_lowspeed: false,
+										last_error: None
+									};
 
-								trigger_pin.set_high();
-								fnord.await;
-								trigger_pin.set_low();
+									trigger_pin.set_high();
+									let result = fnord.await;
+									trigger_pin.set_low();
+
+									if result.is_ok() {
+										break;
+									}
+								}
+								//debugln!("addr out {:?}", result);
 								
 								let mut zero_byte_buffer = [];
 
-								let fnord = UsbInTransfer {
-									data: &mut zero_byte_buffer,
-									globals: &globals,
-									rx_pointer: 0,
-									state: TransferState::WaitingForAvailableChannel,
-									endpoint_type: EndpointType::Control,
-									endpoint_number: 0,
-									device_address: 0,
-									data_pid: DataPid::Data1,
-									packet_size: 64,
-									is_lowspeed: false,
-									last_error: None
-								};
+								loop {
+									let fnord = UsbInTransfer {
+										data: &mut zero_byte_buffer,
+										globals: &globals,
+										rx_pointer: 0,
+										state: TransferState::WaitingForAvailableChannel,
+										endpoint_type: EndpointType::Control,
+										endpoint_number: 0,
+										device_address: 0,
+										data_pid: DataPid::Data1,
+										packet_size: 64,
+										is_lowspeed: false,
+										last_error: None
+									};
 
-								fnord.await;
+									let result = fnord.await;
+
+									if result.is_ok() {
+										break;
+									}
+								}
+								//debugln!("addr in {:?}", result);
 							
 
-								let get_descriptor_packet = [
-									0x80u8, // device, standard, host to device
-									0x06, // get descriptor
-									0x00, 0x01, // descriptor 1
-									0x00, 0x00, // index
-									18, 0, // length
-								];
-								let fnord = UsbOutTransfer {
-									data: &get_descriptor_packet,
-									globals: &globals,
-									state: TransferState::WaitingForAvailableChannel,
-									endpoint_type: EndpointType::Control,
-									endpoint_number: 0,
-									device_address: 1,
-									data_pid: DataPid::MdataSetup,
-									packet_size: 64,
-									is_lowspeed: false,
-									last_error: None
-								};
-								trigger_pin.set_high();
-								fnord.await;
+								loop {
+									let get_descriptor_packet = [
+										0x80u8, // device, standard, host to device
+										0x06, // get descriptor
+										0x00, 0x01, // descriptor 1
+										0x00, 0x00, // index
+										18, 0, // length
+									];
+									let fnord = UsbOutTransfer {
+										data: &get_descriptor_packet,
+										globals: &globals,
+										state: TransferState::WaitingForAvailableChannel,
+										endpoint_type: EndpointType::Control,
+										endpoint_number: 0,
+										device_address: 1,
+										data_pid: DataPid::MdataSetup,
+										packet_size: 64,
+										is_lowspeed: false,
+										last_error: None
+									};
+									trigger_pin.set_high();
+									let result = fnord.await;
+									//debugln!("descr out {:?}", result);
+
+									if result.is_ok() {
+										break;
+									}
+								}
+
 
 								let mut descriptor_buffer = [0; 18];
+								loop {
+									let fnord = UsbInTransfer {
+										data: &mut descriptor_buffer,
+										globals: &globals,
+										rx_pointer: 0,
+										state: TransferState::WaitingForAvailableChannel,
+										endpoint_type: EndpointType::Control,
+										endpoint_number: 0,
+										device_address: 1,
+										data_pid: DataPid::Data1,
+										packet_size: 64,
+										is_lowspeed: false,
+										last_error: None
+									};
 
-								let fnord = UsbInTransfer {
-									data: &mut descriptor_buffer,
-									globals: &globals,
-									rx_pointer: 0,
-									state: TransferState::WaitingForAvailableChannel,
-									endpoint_type: EndpointType::Control,
-									endpoint_number: 0,
-									device_address: 1,
-									data_pid: DataPid::Data1,
-									packet_size: 64,
-									is_lowspeed: false,
-									last_error: None
-								};
+									let result = fnord.await;
 
-								fnord.await;
+									if result.is_ok() {
+										break;
+									}
+									debugln!("descr in {:?}", result);
+								}
+
+								debugln!("descr in Ok");
 								
 								debug!("Descriptor: ");
 								for byte in descriptor_buffer {
