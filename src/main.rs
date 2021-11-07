@@ -104,9 +104,9 @@ enum TransferError {
 }
 
 impl Future for UsbInTransfer<'_> {
-	type Output = Result<(), TransferError>;
+	type Output = Result<usize, TransferError>;
 
-	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), TransferError>> {
+	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<usize, TransferError>> {
 		let globals = self.globals.borrow_mut();
 		let usb_host = globals.usb_host;
 		//let tx = self.globals.tx;
@@ -157,6 +157,12 @@ impl Future for UsbInTransfer<'_> {
 									let remaining = usize::min(len - i, 4);
 									self.data[offset..(offset + remaining)].copy_from_slice(&fifo_word[0..remaining]);
 								}
+								self.rx_pointer += len;
+								if self.rx_pointer < self.data.len() {
+									usb_host.hccharx(channel).modify(|_, w| w.chena().set_bit()); // FIXME really?
+								}
+
+								
 							}
 							_ => {}
 						}
@@ -187,7 +193,7 @@ impl Future for UsbInTransfer<'_> {
 
 				//FIXME is that really wrong? if usb_host.hccharx(channel).read().chena().bit_is_clear() {
 				if hcint.xfrc().bit_is_set() && self.last_error.is_none() {
-					return Poll::Ready(Ok(()));
+					return Poll::Ready(Ok(self.rx_pointer));
 				}
 				else if hcint.xfrc().bit_is_set() || hcint.chh().bit_is_set() {
 					return Poll::Ready(Err(self.last_error.unwrap_or(TransferError::Unknown)));
@@ -245,7 +251,7 @@ impl Future for UsbOutTransfer<'_> {
 					unsafe {
 						usb_host.hctsizx(channel).write(|w| w
 							.dpid().bits(self.data_pid as u8)
-							.pktcnt().bits(div_ceil(self.data.len(), self.packet_size as usize) as u16)
+							.pktcnt().bits( u16::max(1, div_ceil(self.data.len(), self.packet_size as usize) as u16))
 							.xfrsiz().bits(self.data.len() as u32)
 						);
 						usb_host.hccharx(channel).write(|w| w
@@ -315,6 +321,7 @@ impl Future for UsbOutTransfer<'_> {
 					self.last_error = error;
 				}
 
+				//debug!("{}", hcint.xfrc().bit());
 				//FIXME is that really wrong? if usb_host.hccharx(channel).read().chena().bit_is_clear() {
 				if hcint.xfrc().bit_is_set() && self.last_error.is_none() {
 					return Poll::Ready(Ok(()));
@@ -651,42 +658,82 @@ fn main() -> ! {
 								//debugln!("addr in {:?}", result);
 							
 
-								loop {
-									let get_descriptor_packet = [
-										0x80u8, // device, standard, host to device
-										0x06, // get descriptor
-										0x00, 0x01, // descriptor 1
-										0x00, 0x00, // index
-										18, 0, // length
-									];
-									let fnord = UsbOutTransfer {
-										data: &get_descriptor_packet,
-										globals: &globals,
-										state: TransferState::WaitingForAvailableChannel,
-										endpoint_type: EndpointType::Control,
-										endpoint_number: 0,
-										device_address: 1,
-										data_pid: DataPid::MdataSetup,
-										packet_size: 64,
-										is_lowspeed: false,
-										last_error: None
-									};
-									trigger_pin.set_high();
-									let result = fnord.await;
-									//debugln!("descr out {:?}", result);
-
-									if result.is_ok() {
-										break;
-									}
-								}
-
-
+								let mut ep0_max_size = 64;
+								let mut short_read = true;
 								let mut descriptor_buffer = [0; 18];
-								loop {
-									let fnord = UsbInTransfer {
-										data: &mut descriptor_buffer,
+								while short_read {
+									debugln!("Retrieving configuration descriptor with maximum packet length of {}", ep0_max_size);
+									loop {
+										let get_descriptor_packet = [
+											0x80u8, // device, standard, host to device
+											0x06, // get descriptor
+											0x00, 0x01, // descriptor 1
+											0x00, 0x00, // index
+											18, 0, // length
+										];
+										let fnord = UsbOutTransfer {
+											data: &get_descriptor_packet,
+											globals: &globals,
+											state: TransferState::WaitingForAvailableChannel,
+											endpoint_type: EndpointType::Control,
+											endpoint_number: 0,
+											device_address: 1,
+											data_pid: DataPid::MdataSetup,
+											packet_size: 64,
+											is_lowspeed: false,
+											last_error: None
+										};
+										trigger_pin.set_high();
+										let result = fnord.await;
+										//debugln!("descr out {:?}", result);
+
+										if result.is_ok() {
+											break;
+										}
+									}
+
+
+									loop {
+										let fnord = UsbInTransfer {
+											data: &mut descriptor_buffer,
+											globals: &globals,
+											rx_pointer: 0,
+											state: TransferState::WaitingForAvailableChannel,
+											endpoint_type: EndpointType::Control,
+											endpoint_number: 0,
+											device_address: 1,
+											data_pid: DataPid::Data1,
+											packet_size: ep0_max_size,
+											is_lowspeed: false,
+											last_error: None
+										};
+
+										let result = fnord.await;
+										trigger_pin.toggle();
+
+										debugln!("descr in {:?}", result);
+										if let Ok(size) = result {
+											if size != descriptor_buffer.len() {
+												if size >= 8 {
+													ep0_max_size = descriptor_buffer[7] as u16;
+													short_read = true;
+												}
+												else {
+													panic!("Error reading descriptor");
+												}
+											}
+											else {
+												short_read = false;
+											}
+
+											break;
+										}
+									}
+
+									// status stage (always DATA1)
+									let fnord = UsbOutTransfer {
+										data: &[],
 										globals: &globals,
-										rx_pointer: 0,
 										state: TransferState::WaitingForAvailableChannel,
 										endpoint_type: EndpointType::Control,
 										endpoint_number: 0,
@@ -699,13 +746,8 @@ fn main() -> ! {
 
 									let result = fnord.await;
 
-									if result.is_ok() {
-										break;
-									}
-									debugln!("descr in {:?}", result);
+									debugln!("descr out {:?}", result);
 								}
-
-								debugln!("descr in Ok");
 								
 								debug!("Descriptor: ");
 								for byte in descriptor_buffer {
