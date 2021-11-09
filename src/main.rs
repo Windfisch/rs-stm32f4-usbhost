@@ -47,9 +47,9 @@ enum UsbLoop {
 	IgnoreThis
 }
 
-enum TransferState {
+enum TransactionState {
 	WaitingForAvailableChannel,
-	WaitingForTransferToFinish(u8)
+	WaitingForTransactionToFinish(u8)
 }
 
 struct UsbGlobals {
@@ -65,9 +65,9 @@ enum DataPid {
 	MdataSetup = 3
 }
 
-struct UsbOutTransfer<'a> {
+struct UsbOutTransaction<'a> {
 	data: &'a [u8],
-	state: TransferState,
+	state: TransactionState,
 	globals: &'a RefCell<UsbGlobals>,
 	endpoint_type: EndpointType,
 	endpoint_number: u8,
@@ -75,12 +75,12 @@ struct UsbOutTransfer<'a> {
 	data_pid: DataPid,
 	packet_size: u16,
 	is_lowspeed: bool,
-	last_error: Option<TransferError>
+	last_error: Option<TransactionError>
 }
 
-struct UsbInTransfer<'a> {
+struct UsbInTransaction<'a> {
 	data: &'a mut [u8],
-	state: TransferState,
+	state: TransactionState,
 	globals: &'a RefCell<UsbGlobals>,
 	rx_pointer: usize,
 	endpoint_type: EndpointType,
@@ -89,11 +89,11 @@ struct UsbInTransfer<'a> {
 	data_pid: DataPid,
 	packet_size: u16,
 	is_lowspeed: bool,
-	last_error: Option<TransferError>
+	last_error: Option<TransactionError>
 }
 
 #[derive(Copy, Clone, Debug)]
-enum TransferError {
+enum TransactionError {
 	DataToggleError,
 	FrameOverrun,
 	BabbleError,
@@ -103,15 +103,15 @@ enum TransferError {
 	Unknown
 }
 
-impl Future for UsbInTransfer<'_> {
-	type Output = Result<usize, TransferError>;
+impl Future for UsbInTransaction<'_> {
+	type Output = Result<usize, TransactionError>;
 
-	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<usize, TransferError>> {
+	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<usize, TransactionError>> {
 		let globals = self.globals.borrow_mut();
 		let usb_host = globals.usb_host;
 		//let tx = self.globals.tx;
 		match self.state {
-			TransferState::WaitingForAvailableChannel => {
+			TransactionState::WaitingForAvailableChannel => {
 				let available_channel = (0..8).find(|i| usb_host.hccharx(*i).read().chena().bit_is_clear());
 				if let Some(channel) = available_channel {
 					unsafe {
@@ -132,10 +132,10 @@ impl Future for UsbInTransfer<'_> {
 						);
 					}
 
-					self.state = TransferState::WaitingForTransferToFinish(channel);
+					self.state = TransactionState::WaitingForTransactionToFinish(channel);
 				}
 			}
-			TransferState::WaitingForTransferToFinish(channel) => {
+			TransactionState::WaitingForTransactionToFinish(channel) => {
 				if let Some(ref grxsts) = globals.grxsts {
 					if grxsts.chnum().bits() == channel {
 						let packet_status = PacketStatus::from(grxsts.pktsts().bits());
@@ -172,20 +172,20 @@ impl Future for UsbInTransfer<'_> {
 				usb_host.hcintx(channel).write(|w| unsafe { w.bits(!0) } );
 				
 				let error =
-					if hcint.bberr().bit() { Some(TransferError::BabbleError) }
-					else if hcint.dterr().bit() { Some(TransferError::DataToggleError) }
-					else if hcint.frmor().bit() { Some(TransferError::FrameOverrun) }
-					else if hcint.stall().bit() { Some(TransferError::Stall) }
-					else if hcint.txerr().bit() { Some(TransferError::TransactionError) }
-					else if hcint.nak().bit() { Some(TransferError::Nak) }
+					if hcint.bberr().bit() { Some(TransactionError::BabbleError) }
+					else if hcint.dterr().bit() { Some(TransactionError::DataToggleError) }
+					else if hcint.frmor().bit() { Some(TransactionError::FrameOverrun) }
+					else if hcint.stall().bit() { Some(TransactionError::Stall) }
+					else if hcint.txerr().bit() { Some(TransactionError::TransactionError) }
+					else if hcint.nak().bit() { Some(TransactionError::Nak) }
 					else { None };
 
 				if error.is_some() {
-					debugln!("Error in IN transfer {:?}, disabling channel", error.unwrap());
+					debugln!("Error in IN transaction {:?}, disabling channel", error.unwrap());
 					usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
 
 					if self.last_error.is_some() {
-						debugln!("WARNING: multiple errors in IN transfer");
+						debugln!("WARNING: multiple errors in IN transaction");
 					}
 
 					self.last_error = error;
@@ -196,7 +196,7 @@ impl Future for UsbInTransfer<'_> {
 					return Poll::Ready(Ok(self.rx_pointer));
 				}
 				else if hcint.xfrc().bit_is_set() || hcint.chh().bit_is_set() {
-					return Poll::Ready(Err(self.last_error.unwrap_or(TransferError::Unknown)));
+					return Poll::Ready(Err(self.last_error.unwrap_or(TransactionError::Unknown)));
 				}
 			}
 		}
@@ -219,7 +219,7 @@ fn div_ceil(a: usize, b: usize) -> usize {
 #[derive(Copy, Clone, Debug)]
 enum PacketStatus {
 	InDataPacketReceived,
-	InTransferCompleted,
+	InTransactionCompleted,
 	DataToggleError,
 	ChannelHalted,
 	Unknown
@@ -230,7 +230,7 @@ impl From<u8> for PacketStatus {
 		use PacketStatus::*;
 		match val {
 			2 => InDataPacketReceived,
-			3 => InTransferCompleted,
+			3 => InTransactionCompleted,
 			5 => DataToggleError,
 			7 => ChannelHalted,
 			_ => Unknown
@@ -238,14 +238,14 @@ impl From<u8> for PacketStatus {
 	}
 }
 
-impl Future for UsbOutTransfer<'_> {
-	type Output = Result<(), TransferError>;
+impl Future for UsbOutTransaction<'_> {
+	type Output = Result<(), TransactionError>;
 
 	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
 		let globals = self.globals.borrow_mut();
 		let usb_host = globals.usb_host;
 		match self.state {
-			TransferState::WaitingForAvailableChannel => {
+			TransactionState::WaitingForAvailableChannel => {
 				let available_channel = (0..8).find(|i| usb_host.hccharx(*i).read().chena().bit_is_clear());
 				if let Some(channel) = available_channel {
 					unsafe {
@@ -294,28 +294,28 @@ impl Future for UsbOutTransfer<'_> {
 						//debugln!("gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
 					}
 
-					self.state = TransferState::WaitingForTransferToFinish(channel);
+					self.state = TransactionState::WaitingForTransactionToFinish(channel);
 				}
 			}
-			TransferState::WaitingForTransferToFinish(channel) => {
+			TransactionState::WaitingForTransactionToFinish(channel) => {
 				let hcint = usb_host.hcintx(channel).read();
 				usb_host.hcintx(channel).write(|w| unsafe { w.bits(!0) } );
 				
 				let error =
-					if hcint.bberr().bit() { Some(TransferError::BabbleError) }
-					else if hcint.dterr().bit() { Some(TransferError::DataToggleError) }
-					else if hcint.frmor().bit() { Some(TransferError::FrameOverrun) }
-					else if hcint.stall().bit() { Some(TransferError::Stall) }
-					else if hcint.txerr().bit() { Some(TransferError::TransactionError) }
-					else if hcint.nak().bit() { Some(TransferError::Nak) }
+					if hcint.bberr().bit() { Some(TransactionError::BabbleError) }
+					else if hcint.dterr().bit() { Some(TransactionError::DataToggleError) }
+					else if hcint.frmor().bit() { Some(TransactionError::FrameOverrun) }
+					else if hcint.stall().bit() { Some(TransactionError::Stall) }
+					else if hcint.txerr().bit() { Some(TransactionError::TransactionError) }
+					else if hcint.nak().bit() { Some(TransactionError::Nak) }
 					else { None };
 
 				if error.is_some() {
-					debugln!("Error in OUT transfer {:?}, disabling channel", error.unwrap());
+					debugln!("Error in OUT transaction {:?}, disabling channel", error.unwrap());
 					usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
 					
 					if self.last_error.is_some() {
-						debugln!("WARNING: multiple errors in OUT transfer");
+						debugln!("WARNING: multiple errors in OUT transaction");
 					}
 
 					self.last_error = error;
@@ -327,7 +327,7 @@ impl Future for UsbOutTransfer<'_> {
 					return Poll::Ready(Ok(()));
 				}
 				else if hcint.xfrc().bit_is_set() || hcint.chh().bit_is_set() {
-					return Poll::Ready(Err(self.last_error.unwrap_or(TransferError::Unknown)));
+					return Poll::Ready(Err(self.last_error.unwrap_or(TransactionError::Unknown)));
 				}
 			}
 		}
@@ -550,7 +550,7 @@ fn main() -> ! {
 						writeln!(tx, "#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
 							match rxstsp.pktsts().bits() {
 								2 => "IN data packet received",
-								3 => "IN transfer completed",
+								3 => "IN transaction completed",
 								5 => "Data toggle error",
 								7 => "Channel halted",
 								_ => "(unknown)"
@@ -609,10 +609,10 @@ fn main() -> ! {
 								];
 
 								loop {
-									let fnord = UsbOutTransfer {
+									let fnord = UsbOutTransaction {
 										data: &setup_packet,
 										globals: &globals,
-										state: TransferState::WaitingForAvailableChannel,
+										state: TransactionState::WaitingForAvailableChannel,
 										endpoint_type: EndpointType::Control,
 										endpoint_number: 0,
 										device_address: 0,
@@ -635,11 +635,11 @@ fn main() -> ! {
 								let mut zero_byte_buffer = [];
 
 								loop {
-									let fnord = UsbInTransfer {
+									let fnord = UsbInTransaction {
 										data: &mut zero_byte_buffer,
 										globals: &globals,
 										rx_pointer: 0,
-										state: TransferState::WaitingForAvailableChannel,
+										state: TransactionState::WaitingForAvailableChannel,
 										endpoint_type: EndpointType::Control,
 										endpoint_number: 0,
 										device_address: 0,
@@ -671,10 +671,10 @@ fn main() -> ! {
 											0x00, 0x00, // index
 											18, 0, // length
 										];
-										let fnord = UsbOutTransfer {
+										let fnord = UsbOutTransaction {
 											data: &get_descriptor_packet,
 											globals: &globals,
-											state: TransferState::WaitingForAvailableChannel,
+											state: TransactionState::WaitingForAvailableChannel,
 											endpoint_type: EndpointType::Control,
 											endpoint_number: 0,
 											device_address: 1,
@@ -694,11 +694,11 @@ fn main() -> ! {
 
 
 									loop {
-										let fnord = UsbInTransfer {
+										let fnord = UsbInTransaction {
 											data: &mut descriptor_buffer,
 											globals: &globals,
 											rx_pointer: 0,
-											state: TransferState::WaitingForAvailableChannel,
+											state: TransactionState::WaitingForAvailableChannel,
 											endpoint_type: EndpointType::Control,
 											endpoint_number: 0,
 											device_address: 1,
@@ -731,10 +731,10 @@ fn main() -> ! {
 									}
 
 									// status stage (always DATA1)
-									let fnord = UsbOutTransfer {
+									let fnord = UsbOutTransaction {
 										data: &[],
 										globals: &globals,
-										state: TransferState::WaitingForAvailableChannel,
+										state: TransactionState::WaitingForAvailableChannel,
 										endpoint_type: EndpointType::Control,
 										endpoint_number: 0,
 										device_address: 1,
