@@ -339,6 +339,162 @@ struct SleepFuture {
 	// TODO: check systick against end time.
 }
 
+struct UsbHost {
+	globals: RefCell<UsbGlobals>
+}
+
+impl UsbHost {
+	async fn control_out_transfer(&self, request: &[u8], data: Option<&mut [u8]>, device_address: u8, packet_size: u16) {
+		// setup stage
+		loop {
+			let fnord = UsbOutTransaction {
+				data: request,
+				globals: &self.globals,
+				state: TransactionState::WaitingForAvailableChannel,
+				endpoint_type: EndpointType::Control,
+				endpoint_number: 0,
+				device_address,
+				data_pid: DataPid::MdataSetup,
+				packet_size,
+				is_lowspeed: false,
+				last_error: None
+			};
+
+			let result = fnord.await;
+
+			if result.is_ok() {
+				break;
+			}
+		}
+		
+		// data stage
+		if let Some(data) = data {
+			todo!();
+		}
+
+		// status stage
+		loop {
+			let fnord = UsbInTransaction {
+				data: &mut [],
+				globals: &self.globals,
+				rx_pointer: 0,
+				state: TransactionState::WaitingForAvailableChannel,
+				endpoint_type: EndpointType::Control,
+				endpoint_number: 0,
+				device_address,
+				data_pid: DataPid::Data1,
+				packet_size,
+				is_lowspeed: false,
+				last_error: None
+			};
+
+			let result = fnord.await;
+
+			if result.is_ok() {
+				break;
+			}
+		}
+	}
+
+	async fn control_in_transfer(&self, request: &[u8], data: Option<&mut [u8]>, device_address: u8, packet_size: u16) -> usize {
+		loop {
+			let fnord = UsbOutTransaction {
+				data: &request,
+				globals: &self.globals,
+				state: TransactionState::WaitingForAvailableChannel,
+				endpoint_type: EndpointType::Control,
+				endpoint_number: 0,
+				device_address,
+				data_pid: DataPid::MdataSetup,
+				packet_size,
+				is_lowspeed: false,
+				last_error: None
+			};
+
+			let result = fnord.await;
+
+			if result.is_ok() {
+				break;
+			}
+		}
+
+		let size_transferred =
+			if let Some(data) = data {
+				loop {
+					let fnord = UsbInTransaction {
+						data,
+						globals: &self.globals,
+						rx_pointer: 0,
+						state: TransactionState::WaitingForAvailableChannel,
+						endpoint_type: EndpointType::Control,
+						endpoint_number: 0,
+						device_address,
+						data_pid: DataPid::Data1,
+						packet_size,
+						is_lowspeed: false,
+						last_error: None
+					};
+
+					let result = fnord.await;
+
+					if let Ok(size) = result {
+						break size;
+					}
+				}
+			}
+			else {
+				0
+			};
+
+		// status stage (always DATA1)
+		let fnord = UsbOutTransaction {
+			data: &[],
+			globals: &self.globals,
+			state: TransactionState::WaitingForAvailableChannel,
+			endpoint_type: EndpointType::Control,
+			endpoint_number: 0,
+			device_address,
+			data_pid: DataPid::Data1,
+			packet_size,
+			is_lowspeed: false,
+			last_error: None
+		};
+
+		let result = fnord.await;
+
+		return size_transferred;
+	}
+
+	async fn control_get_descriptor(&self, device_address: u8) -> Result<[u8; 18], ()> {
+		let get_descriptor_packet = [
+			0x80u8, // device, standard, host to device
+			0x06, // get descriptor
+			0x00, 0x01, // descriptor 1
+			0x00, 0x00, // index
+			18, 0, // length
+		];
+		let mut descriptor_buffer = [0; 18];
+
+		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut descriptor_buffer), device_address, 64).await;
+
+		if size_received < 8 {
+			return Err(());
+		}
+		else if size_received < descriptor_buffer.len() {
+			let ep0_max_size = descriptor_buffer[7].into();
+			let size_received2 = self.control_in_transfer(&get_descriptor_packet, Some(&mut descriptor_buffer), device_address, ep0_max_size).await;
+
+			if size_received2 != descriptor_buffer.len() {
+				return Err(());
+			}
+		}
+		
+		return Ok(descriptor_buffer);
+	}
+}
+
+
+
 trait Fnord {
 	fn hcintx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0;
 	fn hccharx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0;
@@ -598,8 +754,10 @@ fn main() -> ! {
 								grxsts: None,
 								usb_host: core::mem::transmute(&otg_fs_host) // FIXME FIXME FIXME FIXME FIXME!!!
 							});
+							let host = UsbHost { globals };
 
 							let mut async_block = async {
+								//debugln!("addr in {:?}", result);
 								let setup_packet = [
 									0x00u8, // device, standard, host to device
 									0x05, // set address
@@ -607,158 +765,27 @@ fn main() -> ! {
 									0x00, 0x00, // index
 									0x00, 0x00, // length
 								];
+								trigger_pin.set_high();
+								host.control_out_transfer(&setup_packet, None, 0, 64).await;
+								trigger_pin.set_low();
 
-								loop {
-									let fnord = UsbOutTransaction {
-										data: &setup_packet,
-										globals: &globals,
-										state: TransactionState::WaitingForAvailableChannel,
-										endpoint_type: EndpointType::Control,
-										endpoint_number: 0,
-										device_address: 0,
-										data_pid: DataPid::MdataSetup,
-										packet_size: 64,
-										is_lowspeed: false,
-										last_error: None
-									};
-
-									trigger_pin.set_high();
-									let result = fnord.await;
+								trigger_pin.set_high();
+								if let Ok(descriptor) = host.control_get_descriptor(1).await {
 									trigger_pin.set_low();
-
-									if result.is_ok() {
-										break;
+									debug!("Descriptor: ");
+									for byte in descriptor {
+										debug!("{:02X} ", byte);
 									}
+									debugln!("");
 								}
-								//debugln!("addr out {:?}", result);
-								
-								let mut zero_byte_buffer = [];
-
-								loop {
-									let fnord = UsbInTransaction {
-										data: &mut zero_byte_buffer,
-										globals: &globals,
-										rx_pointer: 0,
-										state: TransactionState::WaitingForAvailableChannel,
-										endpoint_type: EndpointType::Control,
-										endpoint_number: 0,
-										device_address: 0,
-										data_pid: DataPid::Data1,
-										packet_size: 64,
-										is_lowspeed: false,
-										last_error: None
-									};
-
-									let result = fnord.await;
-
-									if result.is_ok() {
-										break;
-									}
+								else {
+									debug!("Descriptor: ERROR");
 								}
-								//debugln!("addr in {:?}", result);
-							
-
-								let mut ep0_max_size = 64;
-								let mut short_read = true;
-								let mut descriptor_buffer = [0; 18];
-								while short_read {
-									debugln!("Retrieving configuration descriptor with maximum packet length of {}", ep0_max_size);
-									loop {
-										let get_descriptor_packet = [
-											0x80u8, // device, standard, host to device
-											0x06, // get descriptor
-											0x00, 0x01, // descriptor 1
-											0x00, 0x00, // index
-											18, 0, // length
-										];
-										let fnord = UsbOutTransaction {
-											data: &get_descriptor_packet,
-											globals: &globals,
-											state: TransactionState::WaitingForAvailableChannel,
-											endpoint_type: EndpointType::Control,
-											endpoint_number: 0,
-											device_address: 1,
-											data_pid: DataPid::MdataSetup,
-											packet_size: 64,
-											is_lowspeed: false,
-											last_error: None
-										};
-										trigger_pin.set_high();
-										let result = fnord.await;
-										//debugln!("descr out {:?}", result);
-
-										if result.is_ok() {
-											break;
-										}
-									}
-
-
-									loop {
-										let fnord = UsbInTransaction {
-											data: &mut descriptor_buffer,
-											globals: &globals,
-											rx_pointer: 0,
-											state: TransactionState::WaitingForAvailableChannel,
-											endpoint_type: EndpointType::Control,
-											endpoint_number: 0,
-											device_address: 1,
-											data_pid: DataPid::Data1,
-											packet_size: ep0_max_size,
-											is_lowspeed: false,
-											last_error: None
-										};
-
-										let result = fnord.await;
-										trigger_pin.toggle();
-
-										debugln!("descr in {:?}", result);
-										if let Ok(size) = result {
-											if size != descriptor_buffer.len() {
-												if size >= 8 {
-													ep0_max_size = descriptor_buffer[7] as u16;
-													short_read = true;
-												}
-												else {
-													panic!("Error reading descriptor");
-												}
-											}
-											else {
-												short_read = false;
-											}
-
-											break;
-										}
-									}
-
-									// status stage (always DATA1)
-									let fnord = UsbOutTransaction {
-										data: &[],
-										globals: &globals,
-										state: TransactionState::WaitingForAvailableChannel,
-										endpoint_type: EndpointType::Control,
-										endpoint_number: 0,
-										device_address: 1,
-										data_pid: DataPid::Data1,
-										packet_size: 64,
-										is_lowspeed: false,
-										last_error: None
-									};
-
-									let result = fnord.await;
-
-									debugln!("descr out {:?}", result);
-								}
-								
-								debug!("Descriptor: ");
-								for byte in descriptor_buffer {
-									debug!("{:02X} ", byte);
-								}
-								debugln!("");
 							};
 
 							loop {
 								{
-									let mut globals = globals.borrow_mut();
+									let mut globals = host.globals.borrow_mut();
 									globals.grxsts = None;
 									if otg_fs_global.gintsts.read().rxflvl().bit() {
 										globals.grxsts = Some(otg_fs_global.grxstsp_host().read());
