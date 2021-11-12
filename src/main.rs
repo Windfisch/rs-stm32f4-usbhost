@@ -158,6 +158,7 @@ impl Future for UsbInTransaction<'_> {
 									self.data[offset..(offset + remaining)].copy_from_slice(&fifo_word[0..remaining]);
 								}
 								self.rx_pointer += len;
+								debugln!("{} / {}", self.rx_pointer, self.data.len());
 								if self.rx_pointer < self.data.len() {
 									usb_host.hccharx(channel).modify(|_, w| w.chena().set_bit()); // FIXME really?
 								}
@@ -465,7 +466,7 @@ impl UsbHost {
 		return size_transferred;
 	}
 
-	async fn control_get_descriptor(&self, device_address: u8) -> Result<[u8; 18], ()> {
+	async fn get_device_descriptor(&self, device_address: u8) -> Result<[u8; 18], ()> {
 		let get_descriptor_packet = [
 			0x80u8, // device, standard, host to device
 			0x06, // get descriptor
@@ -490,6 +491,41 @@ impl UsbHost {
 		}
 		
 		return Ok(descriptor_buffer);
+	}
+
+	async fn get_configuration_descriptor(&self, device_address: u8, buffer: &mut [u8]) -> Result<usize, ()> {
+		assert! (buffer.len() >= 9);
+
+		let mut get_descriptor_packet = [
+			0x80u8, // device, standard, host to device
+			0x06, // get descriptor
+			0x00, 0x02,
+			0x00, 0x00, // index
+			9, 0, // only the first descriptor with the total length field
+		];
+
+		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..9]), device_address, 64).await;
+
+		if size_received < 9 {
+			return Err(());
+		}
+
+		let total_length = buffer[2] as u16 + ((buffer[3] as u16) << 8);
+
+		if total_length as usize > buffer.len() {
+			return Err(());
+		}
+
+		get_descriptor_packet[6] = buffer[2];
+		get_descriptor_packet[7] = buffer[3];
+
+		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..total_length.into()]), device_address, 64).await;
+
+		if size_received != total_length.into() {
+			return Err(());
+		}
+		
+		return Ok(total_length.into());
 	}
 }
 
@@ -770,7 +806,7 @@ fn main() -> ! {
 								trigger_pin.set_low();
 
 								trigger_pin.set_high();
-								if let Ok(descriptor) = host.control_get_descriptor(1).await {
+								if let Ok(descriptor) = host.get_device_descriptor(1).await {
 									trigger_pin.set_low();
 									debug!("Descriptor: ");
 									for byte in descriptor {
@@ -781,6 +817,21 @@ fn main() -> ! {
 								else {
 									debug!("Descriptor: ERROR");
 								}
+
+								let mut blab = [0; 25];
+								host.control_in_transfer(&[
+										0x80u8, // device, standard, host to device
+										0x06, // get descriptor
+										0x00, 0x02, // descriptor 2
+										0x00, 0x00, // index
+										25, 0, // length
+									],
+									Some(&mut blab),
+									1,
+									8
+								).await;
+
+
 							};
 
 							loop {
