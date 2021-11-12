@@ -493,7 +493,7 @@ impl UsbHost {
 		return Ok(descriptor_buffer);
 	}
 
-	async fn get_configuration_descriptor(&self, device_address: u8, buffer: &mut [u8]) -> Result<usize, ()> {
+	async fn get_configuration_descriptor(&self, device_address: u8, buffer: &mut [u8]) -> Result<usize, GetDescriptorError> {
 		assert! (buffer.len() >= 9);
 
 		let mut get_descriptor_packet = [
@@ -504,32 +504,36 @@ impl UsbHost {
 			9, 0, // only the first descriptor with the total length field
 		];
 
-		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..9]), device_address, 64).await;
+		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..9]), device_address, 8).await;
 
 		if size_received < 9 {
-			return Err(());
+			return Err(GetDescriptorError::DeviceError);
 		}
 
 		let total_length = buffer[2] as u16 + ((buffer[3] as u16) << 8);
 
 		if total_length as usize > buffer.len() {
-			return Err(());
+			return Err(GetDescriptorError::BufferTooSmall(total_length.into()));
 		}
 
 		get_descriptor_packet[6] = buffer[2];
 		get_descriptor_packet[7] = buffer[3];
 
-		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..total_length.into()]), device_address, 64).await;
+		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..total_length.into()]), device_address, 8).await;
 
 		if size_received != total_length.into() {
-			return Err(());
+			return Err(GetDescriptorError::DeviceError);
 		}
 		
 		return Ok(total_length.into());
 	}
 }
 
-
+#[derive(Debug)]
+enum GetDescriptorError {
+	DeviceError,
+	BufferTooSmall(usize)
+}
 
 trait Fnord {
 	fn hcintx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0;
@@ -818,18 +822,14 @@ fn main() -> ! {
 									debug!("Descriptor: ERROR");
 								}
 
-								let mut blab = [0; 25];
-								host.control_in_transfer(&[
-										0x80u8, // device, standard, host to device
-										0x06, // get descriptor
-										0x00, 0x02, // descriptor 2
-										0x00, 0x00, // index
-										25, 0, // length
-									],
-									Some(&mut blab),
-									1,
-									8
-								).await;
+								let mut blab = [0; 512];
+								let result = host.get_configuration_descriptor(1, &mut blab).await;
+								if let Ok(size) = result {
+									debugln!("Config descriptor: {:02X?}", &blab[0..size]);
+								}
+								else {
+									debugln!("Config descriptor: error {:?}", result);
+								}
 
 
 							};
