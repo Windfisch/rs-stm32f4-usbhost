@@ -493,7 +493,7 @@ impl UsbHost {
 		return Ok(descriptor_buffer);
 	}
 
-	async fn get_configuration_descriptor(&self, device_address: u8, buffer: &mut [u8]) -> Result<usize, GetDescriptorError> {
+	async fn get_configuration_descriptor(&self, device_address: u8, buffer: &mut [u8], max_packet_size: u16) -> Result<usize, GetDescriptorError> {
 		assert! (buffer.len() >= 9);
 
 		let mut get_descriptor_packet = [
@@ -504,7 +504,7 @@ impl UsbHost {
 			9, 0, // only the first descriptor with the total length field
 		];
 
-		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..9]), device_address, 8).await;
+		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..9]), device_address, max_packet_size).await;
 
 		if size_received < 9 {
 			return Err(GetDescriptorError::DeviceError);
@@ -519,7 +519,7 @@ impl UsbHost {
 		get_descriptor_packet[6] = buffer[2];
 		get_descriptor_packet[7] = buffer[3];
 
-		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..total_length.into()]), device_address, 8).await;
+		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..total_length.into()]), device_address, max_packet_size).await;
 
 		if size_received != total_length.into() {
 			return Err(GetDescriptorError::DeviceError);
@@ -810,22 +810,23 @@ fn main() -> ! {
 								trigger_pin.set_low();
 
 								trigger_pin.set_high();
+								let mut ep0_max_size = 64;
 								if let Ok(descriptor) = host.get_device_descriptor(1).await {
 									trigger_pin.set_low();
-									debug!("Descriptor: ");
-									for byte in descriptor {
-										debug!("{:02X} ", byte);
-									}
-									debugln!("");
+									ep0_max_size = descriptor[7].into();
+									debugln!("Descriptor: {:02X?}; max packet size on ep0 is {}", descriptor, ep0_max_size);
 								}
 								else {
 									debug!("Descriptor: ERROR");
 								}
 
+
 								let mut blab = [0; 512];
-								let result = host.get_configuration_descriptor(1, &mut blab).await;
+								let result = host.get_configuration_descriptor(1, &mut blab, ep0_max_size).await;
 								if let Ok(size) = result {
 									debugln!("Config descriptor: {:02X?}", &blab[0..size]);
+
+									parse_midi_config_descriptor(&blab[0..size]);
 								}
 								else {
 									debugln!("Config descriptor: error {:?}", result);
@@ -912,4 +913,42 @@ fn main() -> ! {
 	}
 
 	loop {}
+}
+
+fn parse_midi_config_descriptor(data: &[u8]) {
+	let mut i = 0;
+	while i < data.len() && i + (data[i] as usize) <= data.len() {
+		let descr = &data[i .. (i+data[i] as usize)];
+
+		match descr[1] {
+			0x04 => {
+				debugln!("\n==== Interface ====");
+			}
+			0x24 => {
+				match descr[2] {
+					0x02 => { // midi in jack
+						debugln!("midi in jack #{} ({})", descr[4], descr[3]);
+					}
+					0x03 => { // midi out jack
+						debugln!("midi out jack #{} ({})", descr[4], descr[3]);
+					}
+					0x04 => { debugln!("element"); }
+					_ => { debugln!("??"); }
+				}
+			}
+			0x05 => {
+				debugln!("endpoint #{:02X}", descr[2]);
+			}
+			0x25 => {
+				debugln!("  endpoint has {} embedded midi jacks", descr[3]);
+				for i in 0..(descr[3] as usize) {
+					debugln!("  {} -> jack {}", i, descr[4+i]);
+				}
+			}
+			_ => { debugln!("?"); }
+
+		}
+
+		i += data[i] as usize;
+	}
 }
