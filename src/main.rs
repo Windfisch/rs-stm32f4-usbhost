@@ -939,11 +939,17 @@ fn parse_midi_config_descriptor(data: &[u8]) {
 		let descr = &data[i .. (i+data[i] as usize)];
 
 		match descr[1] {
+			0x02 => {
+				debugln!("\n======== Configuration #{} with {} interfaces ========\n", descr[5], descr[4]);
+			}
 			0x04 => {
-				debugln!("\n==== Interface ====");
+				debugln!("\n==== Interface #{} ====", descr[2]);
 			}
 			0x24 => {
 				match descr[2] {
+					0x01 => {
+						debugln!("CS_INTERFACE");
+					}
 					0x02 => { // midi in jack
 						debugln!("midi in jack #{} ({})", descr[4], descr[3]);
 					}
