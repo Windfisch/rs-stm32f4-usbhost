@@ -527,6 +527,19 @@ impl UsbHost {
 		
 		return Ok(total_length.into());
 	}
+
+	async fn set_configuration(&self, device_address: u8, configuration_index: u8) {
+		let mut packet = [
+			0x00u8, // device, standard, device to host
+			0x09,
+			0x00, configuration_index,
+			0x00, 0x00, // index
+			0, 0,
+		];
+
+		self.control_out_transfer(&packet, None, device_address, 8).await;
+	}
+
 }
 
 #[derive(Debug)]
@@ -825,6 +838,11 @@ fn main() -> ! {
 								let result = host.get_configuration_descriptor(1, &mut blab, ep0_max_size).await;
 								if let Ok(size) = result {
 									debugln!("Config descriptor: {:02X?}", &blab[0..size]);
+
+									let configuration_value = blab[5];
+
+									trigger_pin.set_high();
+									host.set_configuration(1, configuration_value).await;
 
 									parse_midi_config_descriptor(&blab[0..size]);
 								}
