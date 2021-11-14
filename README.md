@@ -20,11 +20,10 @@ What works:
   - Initializing the peripheral.
   - Detecting connect and disconnect events.
   - Setting the device address to a hard-coded value.
-
-What does not yet work:
-
   - Retrieving descriptors.
   - Doing actual communication.
+
+What does not work yet:
   - Usable API.
   - Integration with the usb-host crate
 
