@@ -496,7 +496,7 @@ impl UsbHost {
 	async fn get_configuration_descriptor(&self, device_address: u8, buffer: &mut [u8], max_packet_size: u16) -> Result<usize, GetDescriptorError> {
 		assert! (buffer.len() >= 9);
 
-		let mut get_descriptor_packet = [
+		let mut packet = [
 			0x80u8, // device, standard, host to device
 			0x06, // get descriptor
 			0x00, 0x02,
@@ -504,7 +504,7 @@ impl UsbHost {
 			9, 0, // only the first descriptor with the total length field
 		];
 
-		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..9]), device_address, max_packet_size).await;
+		let size_received = self.control_in_transfer(&packet, Some(&mut buffer[0..9]), device_address, max_packet_size).await;
 
 		if size_received < 9 {
 			return Err(GetDescriptorError::DeviceError);
@@ -516,10 +516,10 @@ impl UsbHost {
 			return Err(GetDescriptorError::BufferTooSmall(total_length.into()));
 		}
 
-		get_descriptor_packet[6] = buffer[2];
-		get_descriptor_packet[7] = buffer[3];
+		packet[6] = buffer[2];
+		packet[7] = buffer[3];
 
-		let size_received = self.control_in_transfer(&get_descriptor_packet, Some(&mut buffer[0..total_length.into()]), device_address, max_packet_size).await;
+		let size_received = self.control_in_transfer(&packet, Some(&mut buffer[0..total_length.into()]), device_address, max_packet_size).await;
 
 		if size_received != total_length.into() {
 			return Err(GetDescriptorError::DeviceError);
@@ -529,7 +529,7 @@ impl UsbHost {
 	}
 
 	async fn set_configuration(&self, device_address: u8, configuration_index: u8) {
-		let mut packet = [
+		let packet = [
 			0x00u8, // device, standard, device to host
 			0x09,
 			0x00, configuration_index,
