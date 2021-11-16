@@ -818,14 +818,14 @@ fn main() -> ! {
 									0x00, 0x00, // index
 									0x00, 0x00, // length
 								];
-								trigger_pin.set_high();
+								//trigger_pin.set_high();
 								host.control_out_transfer(&setup_packet, None, 0, 64).await;
-								trigger_pin.set_low();
+								//trigger_pin.set_low();
 
-								trigger_pin.set_high();
+								//trigger_pin.set_high();
 								let mut ep0_max_size = 64;
 								if let Ok(descriptor) = host.get_device_descriptor(1).await {
-									trigger_pin.set_low();
+									//trigger_pin.set_low();
 									ep0_max_size = descriptor[7].into();
 									debugln!("Descriptor: {:02X?}; max packet size on ep0 is {}", descriptor, ep0_max_size);
 								}
@@ -850,7 +850,28 @@ fn main() -> ! {
 									debugln!("Config descriptor: error {:?}", result);
 								}
 
+								loop {
+									let mut data = [0; 64];
+									let fnord = UsbInTransaction {
+										data: &mut data,
+										globals: &host.globals,
+										rx_pointer: 0,
+										state: TransactionState::WaitingForAvailableChannel,
+										endpoint_type: EndpointType::Bulk,
+										endpoint_number: 1,
+										device_address: 1,
+										data_pid: DataPid::Data0,
+										packet_size: 64,
+										is_lowspeed: false,
+										last_error: None
+									};
 
+									let result = fnord.await;
+
+									if let Ok(size) = result {
+										debugln!("received: {:02X?}", &data[0..size]);
+									}
+								}
 							};
 
 							loop {
@@ -912,7 +933,7 @@ fn main() -> ! {
 
 					// HCINT
 					if otg_fs_global.gintsts.read().hcint().bit() {
-						trigger_pin.set_low();
+						//trigger_pin.set_low();
 						let haint = otg_fs_host.haint.read().bits();
 						writeln!(tx, "#{} hcint (haint = {:08x})", frame_number, haint).ok();
 						for i in 0..8 {
