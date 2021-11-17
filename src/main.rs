@@ -532,7 +532,7 @@ impl UsbHost {
 		let packet = [
 			0x00u8, // device, standard, device to host
 			0x09,
-			0x00, configuration_index,
+			configuration_index, 0x00,
 			0x00, 0x00, // index
 			0, 0,
 		];
