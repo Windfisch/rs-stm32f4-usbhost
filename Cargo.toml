@@ -23,3 +23,6 @@ features = ["rt", "stm32f411"] # replace the model of your microcontroller here 
 
 [unstable]
 build-std = ["core"]
+
+[profile.release]
+debug = true
