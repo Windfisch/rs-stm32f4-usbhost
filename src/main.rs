@@ -7,9 +7,6 @@ use core::future::Future;
 pub(crate) use core::pin::Pin;
 use core::cell::RefCell;
 
-// Halt on panic
-use panic_halt as _; // panic handler
-
 use cortex_m;
 use cortex_m_rt::entry;
 use stm32f4xx_hal as hal;
@@ -19,6 +16,20 @@ use core::fmt::Write;
 use crate::hal::{prelude::*, stm32};
 
 use core::task::{Poll, Context};
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+	use core::mem::MaybeUninit;
+	cortex_m::interrupt::disable();
+
+	let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
+	writeln!(tx, "Panic!").ok();
+	writeln!(tx, "{}", _info).ok();
+
+	loop {}
+}
+
+
 
 #[allow(unused_macros)]
 macro_rules! debug {
