@@ -861,6 +861,7 @@ fn main() -> ! {
 									debugln!("Config descriptor: error {:?}", result);
 								}
 
+								let mut data_pid = DataPid::Data0;
 								loop {
 									let mut data = [0; 64];
 									let fnord = UsbInTransaction {
@@ -871,7 +872,7 @@ fn main() -> ! {
 										endpoint_type: EndpointType::Bulk,
 										endpoint_number: 1,
 										device_address: 1,
-										data_pid: DataPid::Data0,
+										data_pid,
 										packet_size: 64,
 										is_lowspeed: false,
 										last_error: None
@@ -881,6 +882,11 @@ fn main() -> ! {
 
 									if let Ok(size) = result {
 										debugln!("received: {:02X?}", &data[0..size]);
+										data_pid = match data_pid {
+											DataPid::Data0 => DataPid::Data1,
+											DataPid::Data1 => DataPid::Data0,
+											_ => unreachable!()
+										};
 									}
 								}
 							};
