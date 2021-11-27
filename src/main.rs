@@ -169,8 +169,9 @@ impl Future for UsbInTransaction<'_> {
 									self.data[offset..(offset + remaining)].copy_from_slice(&fifo_word[0..remaining]);
 								}
 								self.rx_pointer += len;
-								debugln!("{} / {}", self.rx_pointer, self.data.len());
-								if self.rx_pointer < self.data.len() {
+								let packets_remaining = usb_host.hctsizx(channel).read().pktcnt().bits();
+								debugln!("{} / {} ({})", self.rx_pointer, self.data.len(), packets_remaining);
+								if self.rx_pointer < self.data.len() && packets_remaining > 0 {
 									usb_host.hccharx(channel).modify(|_, w| w.chena().set_bit()); // FIXME really?
 								}
 
