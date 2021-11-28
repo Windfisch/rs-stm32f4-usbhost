@@ -182,7 +182,9 @@ impl Future for UsbInTransaction<'_> {
 					}
 				}
 				let hcint = usb_host.hcintx(channel).read();
-				usb_host.hcintx(channel).write(|w| unsafe { w.bits(!0) } );
+				usb_host.hcintx(channel).write(|w| unsafe { w.bits(hcint.bits()) } );
+
+				//debugln!("{:08X}", hcint.bits());
 				
 				let error =
 					if hcint.bberr().bit() { Some(TransactionError::BabbleError) }
@@ -312,7 +314,7 @@ impl Future for UsbOutTransaction<'_> {
 			}
 			TransactionState::WaitingForTransactionToFinish(channel) => {
 				let hcint = usb_host.hcintx(channel).read();
-				usb_host.hcintx(channel).write(|w| unsafe { w.bits(!0) } );
+				usb_host.hcintx(channel).write(|w| unsafe { w.bits(hcint.bits()) } );
 				
 				let error =
 					if hcint.bberr().bit() { Some(TransactionError::BabbleError) }
@@ -957,7 +959,7 @@ fn main() -> ! {
 						for i in 0..8 {
 							if haint & (1 << i) != 0 {
 								writeln!(tx, "hcint{} = {:08x}", i, otg_fs_host.hcintx(i).read().bits()).ok();
-								otg_fs_host.hcintx(i).write(|w| w.bits(!0));
+								otg_fs_host.hcintx(i).write(|w| w.bits(!0)); // FIXME this is garbage and creates lost updates
 								writeln!(tx, "hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit()).ok();
 							}
 						}
