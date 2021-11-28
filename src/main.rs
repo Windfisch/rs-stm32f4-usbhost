@@ -150,14 +150,7 @@ impl Future for UsbInTransaction<'_> {
 				if let Some(ref grxsts) = globals.grxsts {
 					if grxsts.chnum().bits() == channel {
 						let packet_status = PacketStatus::from(grxsts.pktsts().bits());
-						debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {:?}", usb_host.hfnum.read().frnum().bits(), grxsts.chnum().bits(), grxsts.dpid().bits(), grxsts.bcnt().bits(), grxsts.pktsts().bits(), packet_status
-						);
-
-						/*
-						if (error_condition) {
-							// FIXME: cleanup
-							return Poll::Ready(Err(TODO));
-						}*/
+						//debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {:?}", usb_host.hfnum.read().frnum().bits(), grxsts.chnum().bits(), grxsts.dpid().bits(), grxsts.bcnt().bits(), grxsts.pktsts().bits(), packet_status);
 
 						match packet_status {
 							PacketStatus::InDataPacketReceived => {
@@ -196,7 +189,7 @@ impl Future for UsbInTransaction<'_> {
 					else { None };
 
 				if error.is_some() {
-					debugln!("Error in IN transaction {:?}, disabling channel", error.unwrap());
+					//debugln!("Error in IN transaction {:?}, disabling channel", error.unwrap());
 					usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
 
 					if self.last_error.is_some() {
