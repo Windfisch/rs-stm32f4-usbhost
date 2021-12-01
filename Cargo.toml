@@ -16,8 +16,8 @@ panic-halt = "0.2"
 stm32f4 = "0.13"
 
 [dependencies.stm32f4xx-hal]
-#version = "0.9"
-path="/home/flo/stm32f4xx-hal"
+version = "0.10"
+#path="/home/flo/stm32f4xx-hal"
 #features = ["rt", "stm32f407"] # replace the model of your microcontroller here
 features = ["rt", "stm32f411"] # replace the model of your microcontroller here FIXME
 
