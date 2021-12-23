@@ -681,12 +681,12 @@ struct SleepFuture {
 	// TODO: check systick against end time.
 }
 
-struct UsbHost {
+pub struct UsbHost {
 	globals: RefCell<UsbGlobals>
 }
 
 impl UsbHost {
-	async fn control_out_transfer(&self, request: &[u8], data: Option<&mut [u8]>, device_address: u8, packet_size: u16) {
+	pub async fn control_out_transfer(&self, request: &[u8], data: Option<&mut [u8]>, device_address: u8, packet_size: u16) {
 		// setup stage
 		loop {
 			let fnord = UsbOutTransaction {
@@ -738,7 +738,7 @@ impl UsbHost {
 		}
 	}
 
-	async fn control_in_transfer(&self, request: &[u8], data: Option<&mut [u8]>, device_address: u8, packet_size: u16) -> usize {
+	pub async fn control_in_transfer(&self, request: &[u8], data: Option<&mut [u8]>, device_address: u8, packet_size: u16) -> usize {
 		loop {
 			let fnord = UsbOutTransaction {
 				data: &request,
@@ -807,7 +807,7 @@ impl UsbHost {
 		return size_transferred;
 	}
 
-	async fn get_device_descriptor(&self, device_address: u8) -> Result<[u8; 18], ()> {
+	pub async fn get_device_descriptor(&self, device_address: u8) -> Result<[u8; 18], ()> {
 		let get_descriptor_packet = [
 			0x80u8, // device, standard, host to device
 			0x06, // get descriptor
@@ -834,7 +834,7 @@ impl UsbHost {
 		return Ok(descriptor_buffer);
 	}
 
-	async fn get_configuration_descriptor(&self, device_address: u8, buffer: &mut [u8], max_packet_size: u16) -> Result<usize, GetDescriptorError> {
+	pub async fn get_configuration_descriptor(&self, device_address: u8, buffer: &mut [u8], max_packet_size: u16) -> Result<usize, GetDescriptorError> {
 		assert! (buffer.len() >= 9);
 
 		let mut packet = [
@@ -869,7 +869,7 @@ impl UsbHost {
 		return Ok(total_length.into());
 	}
 
-	async fn set_configuration(&self, device_address: u8, configuration_index: u8) {
+	pub async fn set_configuration(&self, device_address: u8, configuration_index: u8) {
 		let packet = [
 			0x00u8, // device, standard, device to host
 			0x09,
@@ -880,11 +880,22 @@ impl UsbHost {
 
 		self.control_out_transfer(&packet, None, device_address, 8).await;
 	}
+}
 
+pub fn poll(drivers: &mut [Pin<&mut dyn driver::Driver>]) {
+	let waker = null_waker::create();
+	let mut dummy_context = core::task::Context::from_waker(&waker);
+	for driver in drivers {
+		let result = driver.as_mut().future().poll(&mut dummy_context);
+		match result {
+			Poll::Ready(_) => unreachable!(),
+			Poll::Pending => ()
+		};
+	}
 }
 
 #[derive(Debug)]
-enum GetDescriptorError {
+pub enum GetDescriptorError {
 	DeviceError,
 	BufferTooSmall(usize)
 }
