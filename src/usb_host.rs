@@ -14,6 +14,8 @@ use core::task::{Poll, Context};
 
 use crate::null_waker;
 
+use crate::driver;
+
 
 #[allow(unused_macros)]
 macro_rules! debug {
@@ -234,6 +236,10 @@ pub fn usb_mainloop(
 							usb_host: core::mem::transmute(&otg_fs_host) // FIXME FIXME FIXME FIXME FIXME!!!
 						});
 						let host = UsbHost { globals };
+
+
+
+						let driver = driver::MidiDriver::<4>::create_singleton(core::mem::transmute(&host)); // FIXME FIXME FIXME FIXME FIXME!!!
 
 						let mut async_block = async {
 							//debugln!("addr in {:?}", result);
