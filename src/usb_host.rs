@@ -12,7 +12,7 @@ use crate::hal::{prelude::*, stm32};
 
 use core::task::{Poll, Context};
 
-use crate::null_waker;
+use crate::coroutine;
 
 use crate::driver;
 
@@ -38,6 +38,8 @@ macro_rules! debugln {
 
 
 use stm32f4xx_hal::gpio::{Output, PushPull};
+
+
 
 pub fn usb_mainloop(
 	otg_fs_global: stm32f4xx_hal::stm32::OTG_FS_GLOBAL,
@@ -228,7 +230,7 @@ pub fn usb_mainloop(
 						
 						otg_fs_host.haintmsk.write(|w| w.bits(0xFFFF));
 		
-						let waker = null_waker::create();
+						let waker = coroutine::null_waker();
 						let mut dummy_context = core::task::Context::from_waker(&waker);
 				
 						let globals = core::cell::RefCell::new(UsbGlobals {
@@ -888,8 +890,38 @@ impl UsbHost {
 	}
 }
 
+use core::ops::Generator;
+
+type UsbHostManagerCoroutine = impl Generator<()>;
+
+pub struct UsbHostManager /* FIXME dat name */ {
+	host: UsbHost,
+	coroutine: UsbHostManagerCoroutine
+}
+
+impl UsbHostManager {
+	pub fn poll(&mut self) {
+	}
+
+	fn make_coroutine() -> UsbHostManagerCoroutine {
+		|| { yield (); }
+	}
+
+	pub fn new(otg_fs_host: &'static stm32f4xx_hal::stm32::OTG_FS_HOST) -> UsbHostManager {
+		let globals = core::cell::RefCell::new(UsbGlobals {
+			grxsts: None,
+			usb_host: otg_fs_host
+		});
+		let host = UsbHost { globals };
+		UsbHostManager {
+			host,
+			coroutine: Self::make_coroutine()
+		}
+	}
+}
+
 pub fn poll(drivers: &mut [Pin<&mut dyn driver::Driver>]) {
-	let waker = null_waker::create();
+	let waker = coroutine::null_waker();
 	let mut dummy_context = core::task::Context::from_waker(&waker);
 	for driver in drivers {
 		let result = driver.as_mut().future().poll(&mut dummy_context);

@@ -3,8 +3,9 @@
 
 #![feature(type_alias_impl_trait)]
 #![feature(pin_static_ref)]
+#![feature(generators, generator_trait)]
 
-mod null_waker;
+mod coroutine;
 mod usb_host;
 mod driver;
 
@@ -33,6 +34,8 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 	loop {}
 }
+
+
 
 
 

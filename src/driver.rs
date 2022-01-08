@@ -1,6 +1,6 @@
 use core::future::Future;
 use core::pin::Pin;
-use crate::null_waker;
+use crate::coroutine;
 use core::cell::RefCell;
 use crate::usb_host::UsbHost;
 
@@ -94,7 +94,7 @@ impl<const N: usize> Driver for MidiDriver<N> {
 }
 
 fn foo(driver: Pin<&mut dyn Driver>) {
-	let waker = null_waker::create();
+	let waker = coroutine::null_waker();
 	let mut dummy_context = core::task::Context::from_waker(&waker);
 	driver.future().poll(&mut dummy_context);
 }
