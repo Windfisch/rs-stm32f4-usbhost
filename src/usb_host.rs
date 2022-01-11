@@ -40,7 +40,7 @@ macro_rules! debugln {
 use stm32f4xx_hal::gpio::{Output, PushPull};
 
 
-
+#[cfg(feature="")]
 pub fn usb_mainloop(
 	otg_fs_global: stm32f4xx_hal::stm32::OTG_FS_GLOBAL,
 	otg_fs_host: stm32f4xx_hal::stm32::OTG_FS_HOST,
@@ -235,7 +235,7 @@ pub fn usb_mainloop(
 				
 						let globals = core::cell::RefCell::new(UsbGlobals {
 							grxsts: None,
-							usb_host: core::mem::transmute(&otg_fs_host) // FIXME FIXME FIXME FIXME FIXME!!!
+							usb_host: core::mem::transmute(otg_fs_host) // FIXME FIXME FIXME FIXME FIXME!!!
 						});
 						let host = UsbHost { globals };
 
@@ -407,7 +407,7 @@ enum TransactionState {
 
 struct UsbGlobals {
 	grxsts: Option<stm32f4xx_hal::pac::otg_fs_global::grxstsp_host::R>,
-	usb_host: &'static stm32f4xx_hal::pac::OTG_FS_HOST,
+	usb_host: stm32f4xx_hal::pac::OTG_FS_HOST,
 }
 
 #[derive(Clone, Copy)]
@@ -461,7 +461,7 @@ impl Future for UsbInTransaction<'_> {
 
 	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<usize, TransactionError>> {
 		let globals = self.globals.borrow_mut();
-		let usb_host = globals.usb_host;
+		let usb_host = &globals.usb_host;
 		//let tx = self.globals.tx;
 		match self.state {
 			TransactionState::WaitingForAvailableChannel => {
@@ -593,7 +593,7 @@ impl Future for UsbOutTransaction<'_> {
 
 	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
 		let globals = self.globals.borrow_mut();
-		let usb_host = globals.usb_host;
+		let usb_host = &globals.usb_host;
 		match self.state {
 			TransactionState::WaitingForAvailableChannel => {
 				let available_channel = (0..8).find(|i| usb_host.hccharx(*i).read().chena().bit_is_clear());
@@ -890,45 +890,33 @@ impl UsbHost {
 	}
 }
 
+
+pub type UsbHostCoroutine<'a> = impl Future<Output=()>;
+
 use core::ops::Generator;
 
-type UsbHostManagerCoroutine = impl Generator<()>;
-
-pub struct UsbHostManager /* FIXME dat name */ {
-	host: UsbHost,
-	coroutine: UsbHostManagerCoroutine
-}
-
-impl UsbHostManager {
-	pub fn poll(&mut self) {
+impl UsbHost {
+	pub fn make_coroutine<'a>(&'a self) -> UsbHostCoroutine<'a> {
+		async fn foo(host: &UsbHost) {
+			host.get_device_descriptor(1).await; // FIXME dummy
+		}
+		foo(self)
 	}
 
-	fn make_coroutine() -> UsbHostManagerCoroutine {
-		|| { yield (); }
-	}
-
-	pub fn new(otg_fs_host: &'static stm32f4xx_hal::stm32::OTG_FS_HOST) -> UsbHostManager {
+	pub fn new(otg_fs_host: stm32f4xx_hal::stm32::OTG_FS_HOST) -> UsbHost {
 		let globals = core::cell::RefCell::new(UsbGlobals {
 			grxsts: None,
 			usb_host: otg_fs_host
 		});
-		let host = UsbHost { globals };
-		UsbHostManager {
-			host,
-			coroutine: Self::make_coroutine()
-		}
+		UsbHost { globals }
 	}
-}
 
-pub fn poll(drivers: &mut [Pin<&mut dyn driver::Driver>]) {
-	let waker = coroutine::null_waker();
-	let mut dummy_context = core::task::Context::from_waker(&waker);
-	for driver in drivers {
-		let result = driver.as_mut().future().poll(&mut dummy_context);
-		match result {
-			Poll::Ready(_) => unreachable!(),
-			Poll::Pending => ()
-		};
+	// FIXME actually figure out whether the drivers hold a reference to self
+	pub fn poll(&self, host_coroutine: Pin<&mut UsbHostCoroutine>, drivers: &mut [Pin<&dyn driver::DriverInstance>]) {
+		coroutine::poll(host_coroutine);
+		for driver in drivers {
+			driver.as_ref().poll();
+		}
 	}
 }
 

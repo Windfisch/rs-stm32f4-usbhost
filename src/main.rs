@@ -36,7 +36,10 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 
 
+use usb_host::{UsbHost, UsbHostCoroutine};
 
+static mut USB_HOST: Option<UsbHost> = None;
+static mut USB_HOST_COROUTINE: Option<UsbHostCoroutine> = None;
 
 
 #[entry]
@@ -78,7 +81,15 @@ fn main() -> ! {
 		let otg_fs_global = dp.OTG_FS_GLOBAL;
 		let otg_fs_host = dp.OTG_FS_HOST;
 
-		usb_host::usb_mainloop(otg_fs_global, otg_fs_host, tx, delay, trigger_pin);
+		let usb_host_coroutine = unsafe {
+			USB_HOST = Some(usb_host::UsbHost::new(otg_fs_host));
+			USB_HOST_COROUTINE = Some(USB_HOST.as_ref().unwrap().make_coroutine());
+			Pin::new_unchecked(USB_HOST_COROUTINE.as_mut().unwrap())
+		};
+
+		coroutine::poll(usb_host_coroutine);
+
+		//usb_host::usb_mainloop(otg_fs_global, otg_fs_host, tx, delay, trigger_pin);
 	}
 
 	loop {}

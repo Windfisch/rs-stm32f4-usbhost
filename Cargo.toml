@@ -17,6 +17,8 @@ stm32f4 = "0.13"
 heapless = "0.7"
 lazy_static = {version = "1.4.0", features=["spin_no_std"]}
 
+sharing-coroutines-nostd = { path = "/home/flo/rust/coroutine" }
+
 [dependencies.stm32f4xx-hal]
 version = "0.10"
 #path="/home/flo/stm32f4xx-hal"

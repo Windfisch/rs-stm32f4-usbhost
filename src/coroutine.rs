@@ -16,10 +16,24 @@ unsafe fn wake(_: *const ()) { }
 unsafe fn wake_by_ref(_: *const ()) { }
 unsafe fn drop(_: *const ()) { }
 
-fn advance(coroutine: Pin<&mut impl Future<Output=()>>) {
+pub fn poll(coroutine: Pin<&mut impl Future<Output=()>>) {
 	let waker = null_waker();
 	let mut dummy_context = core::task::Context::from_waker(&waker);
-	coroutine.poll(&mut dummy_context);
+	let result = coroutine.poll(&mut dummy_context);
+	match result {
+		Poll::Ready(_) => unreachable!(),
+		Poll::Pending => ()
+	};
+}
+
+pub fn poll_dyn(coroutine: Pin<&mut dyn Future<Output=()>>) {
+	let waker = null_waker();
+	let mut dummy_context = core::task::Context::from_waker(&waker);
+	let result = coroutine.poll(&mut dummy_context);
+	match result {
+		Poll::Ready(_) => unreachable!(),
+		Poll::Pending => ()
+	};
 }
 
 
