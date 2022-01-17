@@ -393,13 +393,6 @@ pub fn usb_mainloop(
 
 
 
-#[derive(Debug)]
-enum UsbLoop {
-	Connected,
-	Disconnected,
-	IgnoreThis
-}
-
 enum TransactionState {
 	WaitingForAvailableChannel,
 	WaitingForTransactionToFinish(u8)
@@ -685,10 +678,6 @@ impl Future for UsbOutTransaction<'_> {
 	}
 }
 
-struct SleepFuture {
-	// TODO: check systick against end time.
-}
-
 pub struct UsbHost {
 	globals: RefCell<UsbGlobals>
 }
@@ -893,8 +882,6 @@ impl UsbHost {
 
 pub type UsbHostCoroutine<'a> = impl Future<Output=()>;
 
-use core::ops::Generator;
-
 impl UsbHost {
 	pub fn make_coroutine<'a>(&'a self) -> UsbHostCoroutine<'a> {
 		async fn foo(host: &UsbHost) {
@@ -912,7 +899,7 @@ impl UsbHost {
 	}
 
 	// FIXME actually figure out whether the drivers hold a reference to self
-	pub fn poll(&self, host_coroutine: Pin<&mut UsbHostCoroutine>, drivers: &mut [Pin<&dyn driver::DriverInstance>]) {
+	pub fn poll(&self, host_coroutine: Pin<&mut UsbHostCoroutine>, drivers: &[Pin<&dyn driver::DriverInstance>]) {
 		coroutine::poll(host_coroutine);
 		for driver in drivers {
 			driver.as_ref().poll();
@@ -926,14 +913,14 @@ pub enum GetDescriptorError {
 	BufferTooSmall(usize)
 }
 
-trait Fnord {
+trait OtgFsHostExt {
 	fn hcintx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0;
 	fn hccharx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCCHAR0;
 	fn hcintmskx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINTMSK0;
 	fn hctsizx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCTSIZ0;
 }
 
-impl Fnord for stm32f4xx_hal::pac::OTG_FS_HOST {
+impl OtgFsHostExt for stm32f4xx_hal::pac::OTG_FS_HOST {
 	fn hcintx(&self, i: u8) -> &stm32f4xx_hal::stm32::otg_fs_host::HCINT0 {
 		assert!(i < 8);
 		let ptr: *const stm32f4xx_hal::stm32::otg_fs_host::HCINT0 = &self.hcint0;

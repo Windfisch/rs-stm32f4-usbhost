@@ -81,15 +81,18 @@ fn main() -> ! {
 		let otg_fs_global = dp.OTG_FS_GLOBAL;
 		let otg_fs_host = dp.OTG_FS_HOST;
 
-		let usb_host_coroutine = unsafe {
-			USB_HOST = Some(usb_host::UsbHost::new(otg_fs_host));
-			USB_HOST_COROUTINE = Some(USB_HOST.as_ref().unwrap().make_coroutine());
-			Pin::new_unchecked(USB_HOST_COROUTINE.as_mut().unwrap())
-		};
+		use driver::DriverDescriptor;
+		let host = usb_host::UsbHost::new(otg_fs_host);
+		let mut usb_host_coroutine = host.make_coroutine();
+		let usb_host_coroutine_pinned = unsafe { Pin::new_unchecked(&mut usb_host_coroutine) };
 
-		coroutine::poll(usb_host_coroutine);
+		let midi_driver_descriptor = driver::MidiDriverDescriptor{};
+		let instance = midi_driver_descriptor.create_instance();
+		let pinned_driver_instance = unsafe { Pin::new_unchecked(&instance) };
 
-		//usb_host::usb_mainloop(otg_fs_global, otg_fs_host, tx, delay, trigger_pin);
+		host.poll(usb_host_coroutine_pinned, &[pinned_driver_instance]);
+
+		pinned_driver_instance.data().send([1,2,3,4]).unwrap();
 	}
 
 	loop {}

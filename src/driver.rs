@@ -11,8 +11,8 @@ pub trait DriverDescriptor {
 	type DriverFutureType : Future<Output = ()>;
 	type DriverContextType : DriverContext;
 
-	fn wants_device() -> bool; // TODO
-	fn create_instance() -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType>;
+	fn wants_device(&self) -> bool; // TODO
+	fn create_instance(&self) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType>;
 }
 
 pub trait DriverInstance {
@@ -41,8 +41,8 @@ impl DriverDescriptor for MidiDriverDescriptor {
 	type DriverFutureType = MidiDriverFuture<'static>;
 	type DriverContextType = MidiDriverContext;
 
-	fn wants_device() -> bool { todo!(); }
-	fn create_instance() -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType> {
+	fn wants_device(&self) -> bool { todo!(); }
+	fn create_instance(&self) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType> {
 		let context = MidiDriverContext {
 			send_queue: RefCell::new(heapless::Deque::new()),
 			recv_queue: RefCell::new(heapless::Deque::new())
