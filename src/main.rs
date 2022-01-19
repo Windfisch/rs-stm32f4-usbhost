@@ -8,6 +8,7 @@
 mod coroutine;
 mod usb_host;
 mod driver;
+mod transaction;
 
 use core::future::Future;
 pub(crate) use core::pin::Pin;
@@ -82,7 +83,14 @@ fn main() -> ! {
 		let otg_fs_host = dp.OTG_FS_HOST;
 
 		use driver::DriverDescriptor;
-		let host = usb_host::UsbHost::new(otg_fs_host);
+		let host = usb_host::UsbHost::new(
+			otg_fs_global,
+			otg_fs_host,
+			dp_pin,
+			dm_pin,
+			delay,
+			trigger_pin
+		);
 		let mut usb_host_coroutine = host.make_coroutine();
 		let usb_host_coroutine_pinned = unsafe { Pin::new_unchecked(&mut usb_host_coroutine) };
 
