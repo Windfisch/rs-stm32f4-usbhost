@@ -9,6 +9,7 @@ mod coroutine;
 mod usb_host;
 mod driver;
 mod transaction;
+mod host_ext;
 
 use core::future::Future;
 pub(crate) use core::pin::Pin;
