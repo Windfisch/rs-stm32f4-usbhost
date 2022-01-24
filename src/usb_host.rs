@@ -104,7 +104,7 @@ impl UsbHost {
 		}
 		
 		// data stage
-		if let Some(data) = data {
+		if let Some(_data) = data {
 			todo!();
 		}
 
@@ -464,99 +464,73 @@ impl UsbHost {
 								}
 								
 								otg_fs_host.haintmsk.write(|w| w.bits(0xFFFF));
-				
-								let mut async_block = async {
-									//debugln!("addr in {:?}", result);
-									let setup_packet = [
-										0x00u8, // device, standard, host to device
-										0x05, // set address
-										0x01, 0x00, // address 1
-										0x00, 0x00, // index
-										0x00, 0x00, // length
-									];
-									//host.trigger_pin.borrow_mut().set_high();
-									host.control_out_transfer(&setup_packet, None, 0, 64).await;
+			
+								// ACTUAL DEVICE COMMUNICATION
+								//debugln!("addr in {:?}", result);
+								let setup_packet = [
+									0x00u8, // device, standard, host to device
+									0x05, // set address
+									0x01, 0x00, // address 1
+									0x00, 0x00, // index
+									0x00, 0x00, // length
+								];
+								//host.trigger_pin.borrow_mut().set_high();
+								host.control_out_transfer(&setup_packet, None, 0, 64).await;
+								//host.trigger_pin.borrow_mut().set_low();
+
+								//host.trigger_pin.borrow_mut().set_high();
+								let mut ep0_max_size = 64;
+								if let Ok(descriptor) = host.get_device_descriptor(1).await {
 									//host.trigger_pin.borrow_mut().set_low();
-
-									//host.trigger_pin.borrow_mut().set_high();
-									let mut ep0_max_size = 64;
-									if let Ok(descriptor) = host.get_device_descriptor(1).await {
-										//host.trigger_pin.borrow_mut().set_low();
-										ep0_max_size = descriptor[7].into();
-										debugln!("Descriptor: {:02X?}; max packet size on ep0 is {}", descriptor, ep0_max_size);
-									}
-									else {
-										debug!("Descriptor: ERROR");
-									}
-
-
-									let mut blab = [0; 512];
-									let result = host.get_configuration_descriptor(1, &mut blab, ep0_max_size).await;
-									if let Ok(size) = result {
-										debugln!("Config descriptor: {:02X?}", &blab[0..size]);
-
-										let configuration_value = blab[5];
-
-										host.trigger_pin.borrow_mut().set_high();
-										host.set_configuration(1, configuration_value).await;
-
-										parse_midi_config_descriptor(&blab[0..size]);
-									}
-									else {
-										debugln!("Config descriptor: error {:?}", result);
-									}
-
-									let mut data_pid = DataPid::Data0;
-									loop {
-										let mut data = [0; 64];
-										let fnord = UsbInTransaction::new(
-											&mut data,
-											EndpointType::Bulk,
-											1,
-											1,
-											data_pid,
-											64,
-											false,
-											&host.globals
-										);
-
-										let result = fnord.await;
-
-										if let Ok(size) = result {
-											debugln!("received: {:02X?}", &data[0..size]);
-											data_pid = match data_pid {
-												DataPid::Data0 => DataPid::Data1,
-												DataPid::Data1 => DataPid::Data0,
-												_ => unreachable!()
-											};
-										}
-									}
-								};
-
-								loop {
-									{
-										let mut globals = host.globals.borrow_mut();
-										globals.grxsts = None;
-										if otg_fs_global.gintsts.read().rxflvl().bit() {
-											globals.grxsts = Some(otg_fs_global.grxstsp_host().read());
-										}
-									}
-
-									/*match unsafe {core::pin::Pin::new_unchecked(&mut async_block)}.poll(&mut dummy_context) {
-										core::task::Poll::Ready(_) => { break; }
-										core::task::Poll::Pending => { continue; }
-									}*/ // FIXME
+									ep0_max_size = descriptor[7].into();
+									debugln!("Descriptor: {:02X?}; max packet size on ep0 is {}", descriptor, ep0_max_size);
+								}
+								else {
+									debug!("Descriptor: ERROR");
 								}
 
-								core::mem::drop(async_block);
 
+								let mut blab = [0; 512];
+								let result = host.get_configuration_descriptor(1, &mut blab, ep0_max_size).await;
+								if let Ok(size) = result {
+									debugln!("Config descriptor: {:02X?}", &blab[0..size]);
 
-								// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
+									let configuration_value = blab[5];
 
-								//otg_fs_host.hcchar0.modify(|_, w| w.chdis().set_bit()); // FIXME seems unneeded
+									host.trigger_pin.borrow_mut().set_high();
+									host.set_configuration(1, configuration_value).await;
 
-								debugln!("done");
-								
+									parse_midi_config_descriptor(&blab[0..size]);
+								}
+								else {
+									debugln!("Config descriptor: error {:?}", result);
+								}
+
+								let mut data_pid = DataPid::Data0;
+								loop {
+									let mut data = [0; 64];
+									let fnord = UsbInTransaction::new(
+										&mut data,
+										EndpointType::Bulk,
+										1,
+										1,
+										data_pid,
+										64,
+										false,
+										&host.globals
+									);
+
+									let result = fnord.await;
+
+									if let Ok(size) = result {
+										debugln!("received: {:02X?}", &data[0..size]);
+										data_pid = match data_pid {
+											DataPid::Data0 => DataPid::Data1,
+											DataPid::Data1 => DataPid::Data0,
+											_ => unreachable!()
+										};
+									}
+								}
 							}
 
 							if val.pocchng().bit() {
@@ -655,6 +629,14 @@ impl UsbHost {
 
 	// FIXME actually figure out whether the drivers hold a reference to self
 	pub fn poll(&self, host_coroutine: Pin<&mut UsbHostCoroutine>, drivers: &[Pin<&dyn driver::DriverInstance>]) {
+		{
+			let mut globals = self.globals.borrow_mut();
+			globals.grxsts = None;
+			if globals.usb_global.gintsts.read().rxflvl().bit() {
+				globals.grxsts = Some(globals.usb_global.grxstsp_host().read());
+			}
+		}
+
 		coroutine::poll(host_coroutine);
 		for driver in drivers {
 			driver.as_ref().poll();
