@@ -271,6 +271,10 @@ use stm32f4xx_hal::gpio;
 use stm32f4xx_hal::gpio::Alternate;
 
 impl UsbHost {
+	fn globals(&self) -> core::cell::Ref<UsbGlobals> {
+		self.globals.borrow()
+	}
+
 	pub fn make_coroutine<'a>(&'a self) -> UsbHostCoroutine<'a> {
 		async fn foo(host: &UsbHost) {
 			unsafe {
@@ -394,29 +398,25 @@ impl UsbHost {
 					loop {
 						host.sleep_until(|g| g.usb_global.gintsts.read().bits() != 0).await;
 
-						let globals = host.globals.borrow_mut();
-						let otg_fs_global = &globals.usb_global;
-						let otg_fs_host = &globals.usb_host;
-
-						if otg_fs_global.gintsts.read().sof().bit() {
-							otg_fs_global.gintsts.write(|w| w.sof().set_bit());
-							//write!(tx, "{:8} {:08x}\r", sofcount, otg_fs_host.hcchar0.read().bits());
-							debug!("{:8} {:08x} {:08x}\r", sofcount, otg_fs_host.hfnum.read().bits(), otg_fs_global.gnptxsts.read().bits());
-							//debugln!("hprt = {:08x}", otg_fs_host.hprt.read().bits());
-							//write!(tx, "{:08x}\r", otg_fs_global.gintsts.read().bits());
+						if host.globals().usb_global.gintsts.read().sof().bit() {
+							host.globals().usb_global.gintsts.write(|w| w.sof().set_bit());
+							//write!(tx, "{:8} {:08x}\r", sofcount, host.globals().usb_host.hcchar0.read().bits());
+							debug!("{:8} {:08x} {:08x}\r", sofcount, host.globals().usb_host.hfnum.read().bits(), host.globals().usb_global.gnptxsts.read().bits());
+							//debugln!("hprt = {:08x}", host.globals().usb_host.hprt.read().bits());
+							//write!(tx, "{:08x}\r", host.globals().usb_global.gintsts.read().bits());
 							sofcount += 1;
 						}
 
-						let frame_number = otg_fs_host.hfnum.read().frnum().bits();
+						let frame_number = host.globals().usb_host.hfnum.read().frnum().bits();
 
-						while otg_fs_global.gintsts.read().srqint().bit() {
+						while host.globals().usb_global.gintsts.read().srqint().bit() {
 							debugln!("srqint");
-							otg_fs_global.gintsts.write(|w| w.srqint().set_bit());
+							host.globals().usb_global.gintsts.write(|w| w.srqint().set_bit());
 							// TODO do things
 						}
 
-						while otg_fs_global.gintsts.read().rxflvl().bit() {
-							let rxstsp = otg_fs_global.grxstsp_host().read();
+						while host.globals().usb_global.gintsts.read().rxflvl().bit() {
+							let rxstsp = host.globals().usb_global.grxstsp_host().read();
 							debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
 								match rxstsp.pktsts().bits() {
 									2 => "IN data packet received",
@@ -431,23 +431,23 @@ impl UsbHost {
 						}
 
 						// OTGINT
-						if otg_fs_global.gintsts.read().otgint().bit() {
-							let val = otg_fs_global.gotgint.read().bits();
+						if host.globals().usb_global.gintsts.read().otgint().bit() {
+							let val = host.globals().usb_global.gotgint.read().bits();
 							debugln!("otg {:08x}", val);
-							otg_fs_global.gotgint.modify(|_,w| w.bits(val));
+							host.globals().usb_global.gotgint.modify(|_,w| w.bits(val));
 						}
 
 						// HPRTINT
-						if otg_fs_global.gintsts.read().hprtint().bit() {
-							let val = otg_fs_host.hprt.read();
+						if host.globals().usb_global.gintsts.read().hprtint().bit() {
+							let val = host.globals().usb_host.hprt.read();
 							debugln!("hprt {:08x}", val.bits());
 
 							if val.penchng().bit() {
 								debugln!("#{}, penchng, port enabled is {}", frame_number, val.pena().bit());
 
 								for i in 0..8 {
-									otg_fs_host.hcintx(i).write(|w| w.bits(!0));
-									otg_fs_host.hcintmskx(i).write(|w| w
+									host.globals().usb_host.hcintx(i).write(|w| w.bits(!0));
+									host.globals().usb_host.hcintmskx(i).write(|w| w
 										.xfrcm().set_bit()
 										.chhm().set_bit()
 										.stallm().set_bit()
@@ -460,7 +460,7 @@ impl UsbHost {
 									);
 								}
 								
-								otg_fs_host.haintmsk.write(|w| w.bits(0xFFFF));
+								host.globals().usb_host.haintmsk.write(|w| w.bits(0xFFFF));
 			
 								// ACTUAL DEVICE COMMUNICATION
 								//debugln!("addr in {:?}", result);
@@ -538,39 +538,39 @@ impl UsbHost {
 								debugln!("port connect detected (pcdet)");
 							}
 					
-							otg_fs_host.hprt.modify(|r,w| w.bits(r.bits() & !4)); // do not set PENA???
+							host.globals().usb_host.hprt.modify(|r,w| w.bits(r.bits() & !4)); // do not set PENA???
 						}
 
 						// DISCINT
-						if otg_fs_global.gintsts.read().discint().bit() {
-							otg_fs_global.gintsts.write(|w| w.discint().set_bit());
+						if host.globals().usb_global.gintsts.read().discint().bit() {
+							host.globals().usb_global.gintsts.write(|w| w.discint().set_bit());
 							debugln!("disconnect (discint)");
 							// TODO notify the application about the disconnect
 							break;
 						}
 
 						// MMIS
-						if otg_fs_global.gintsts.read().mmis().bit() {
-							otg_fs_global.gintsts.write(|w| w.mmis().set_bit());
+						if host.globals().usb_global.gintsts.read().mmis().bit() {
+							host.globals().usb_global.gintsts.write(|w| w.mmis().set_bit());
 							debugln!("mode mismatch (mmis)");
 						}
 
 						// IPXFR
-						if otg_fs_global.gintsts.read().ipxfr_incompisoout().bit(){
-							otg_fs_global.gintsts.write(|w| w.ipxfr_incompisoout().set_bit());
+						if host.globals().usb_global.gintsts.read().ipxfr_incompisoout().bit(){
+							host.globals().usb_global.gintsts.write(|w| w.ipxfr_incompisoout().set_bit());
 							debugln!("ipxfr");
 						}
 
 						// HCINT
-						if otg_fs_global.gintsts.read().hcint().bit() {
+						if host.globals().usb_global.gintsts.read().hcint().bit() {
 							//host.trigger_pin.borrow_mut().set_low();
-							let haint = otg_fs_host.haint.read().bits();
+							let haint = host.globals().usb_host.haint.read().bits();
 							debugln!("#{} hcint (haint = {:08x})", frame_number, haint);
 							for i in 0..8 {
 								if haint & (1 << i) != 0 {
-									debugln!("hcint{} = {:08x}", i, otg_fs_host.hcintx(i).read().bits());
-									otg_fs_host.hcintx(i).write(|w| w.bits(!0)); // FIXME this is garbage and creates lost updates
-									debugln!("hcchar0 chena = {}", otg_fs_host.hcchar0.read().chena().bit());
+									debugln!("hcint{} = {:08x}", i, host.globals().usb_host.hcintx(i).read().bits());
+									host.globals().usb_host.hcintx(i).write(|w| w.bits(!0)); // FIXME this is garbage and creates lost updates
+									debugln!("hcchar0 chena = {}", host.globals().usb_host.hcchar0.read().chena().bit());
 								}
 							}
 						}
