@@ -1,8 +1,6 @@
 use core::future::Future;
 use core::pin::Pin;
-use crate::coroutine;
 use core::cell::RefCell;
-use crate::usb_host::UsbHost;
 use sharing_coroutines_nostd;
 
 pub trait DriverContext {}

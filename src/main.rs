@@ -61,7 +61,7 @@ fn main() -> ! {
 		let dp_pin = gpioa.pa12.into_alternate::<10>();
 
 		// Create a delay abstraction based on SysTick
-		let mut delay = hal::delay::Delay::new(cp.SYST, &clocks);
+		let delay = hal::delay::Delay::new(cp.SYST, &clocks);
 
 
 		let mut trigger_pin = gpioa.pa0.into_push_pull_output();

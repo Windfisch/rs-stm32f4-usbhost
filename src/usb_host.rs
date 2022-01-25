@@ -2,9 +2,6 @@ use core::future::Future;
 pub(crate) use core::pin::Pin;
 use core::cell::RefCell;
 
-use cortex_m;
-use cortex_m_rt::entry;
-use stm32f4xx_hal as hal;
 use crate::hal::serial;
 use core::fmt::Write;
 
