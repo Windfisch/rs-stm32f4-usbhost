@@ -93,15 +93,17 @@ fn main() -> ! {
 			trigger_pin
 		);
 		let mut usb_host_coroutine = host.make_coroutine();
-		let usb_host_coroutine_pinned = unsafe { Pin::new_unchecked(&mut usb_host_coroutine) };
+		let mut usb_host_coroutine_pinned = unsafe { Pin::new_unchecked(&mut usb_host_coroutine) };
 
 		let midi_driver_descriptor = driver::MidiDriverDescriptor{};
 		let instance = midi_driver_descriptor.create_instance();
 		let pinned_driver_instance = unsafe { Pin::new_unchecked(&instance) };
+	
+		loop {
+			host.poll(usb_host_coroutine_pinned.as_mut(), &[pinned_driver_instance]);
+		}
 
-		host.poll(usb_host_coroutine_pinned, &[pinned_driver_instance]);
-
-		pinned_driver_instance.data().send([1,2,3,4]).unwrap();
+		//pinned_driver_instance.data().send([1,2,3,4]).unwrap();
 	}
 
 	loop {}
