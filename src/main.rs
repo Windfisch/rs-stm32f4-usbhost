@@ -26,13 +26,13 @@ use crate::hal::{prelude::*, stm32};
 use core::task::{Poll, Context};
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
 	use core::mem::MaybeUninit;
 	cortex_m::interrupt::disable();
 
 	let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
 	writeln!(tx, "Panic!").ok();
-	writeln!(tx, "{}", _info).ok();
+	writeln!(tx, "{}", info).ok();
 
 	loop {}
 }
