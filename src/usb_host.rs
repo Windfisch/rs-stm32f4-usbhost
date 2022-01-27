@@ -270,6 +270,79 @@ pub type UsbHostCoroutine<'a> = impl Future<Output=()>;
 use stm32f4xx_hal::gpio;
 use stm32f4xx_hal::gpio::Alternate;
 
+type CoroutineType<'a> = impl Future<Output=()>;
+fn handle_device(host: &UsbHost) -> CoroutineType {
+	async fn foo(host: &UsbHost) {
+		// ACTUAL DEVICE COMMUNICATION
+		//debugln!("addr in {:?}", result);
+		let setup_packet = [
+			0x00u8, // device, standard, host to device
+			0x05, // set address
+			0x01, 0x00, // address 1
+			0x00, 0x00, // index
+			0x00, 0x00, // length
+		];
+		//host.trigger_pin.borrow().set_high();
+		host.control_out_transfer(&setup_packet, None, 0, 64).await;
+		//host.trigger_pin.borrow().set_low();
+
+		//host.trigger_pin.borrow().set_high();
+		let mut ep0_max_size = 64;
+		if let Ok(descriptor) = host.get_device_descriptor(1).await {
+			//host.trigger_pin.borrow().set_low();
+			ep0_max_size = descriptor[7].into();
+			debugln!("Descriptor: {:02X?}; max packet size on ep0 is {}", descriptor, ep0_max_size);
+		}
+		else {
+			debug!("Descriptor: ERROR");
+		}
+
+
+		let mut blab = [0; 512];
+		let result = host.get_configuration_descriptor(1, &mut blab, ep0_max_size).await;
+		if let Ok(size) = result {
+			debugln!("Config descriptor: {:02X?}", &blab[0..size]);
+
+			let configuration_value = blab[5];
+
+			host.trigger_pin.borrow_mut().set_high();
+			host.set_configuration(1, configuration_value).await;
+
+			parse_midi_config_descriptor(&blab[0..size]);
+		}
+		else {
+			debugln!("Config descriptor: error {:?}", result);
+		}
+
+		let mut data_pid = DataPid::Data0;
+		loop {
+			let mut data = [0; 64];
+			let fnord = UsbInTransaction::new(
+				&mut data,
+				EndpointType::Bulk,
+				1,
+				1,
+				data_pid,
+				64,
+				false,
+				&host.globals
+			);
+
+			let result = fnord.await;
+
+			if let Ok(size) = result {
+				debugln!("received: {:02X?}", &data[0..size]);
+				data_pid = match data_pid {
+					DataPid::Data0 => DataPid::Data1,
+					DataPid::Data1 => DataPid::Data0,
+					_ => unreachable!()
+				};
+			}
+		}
+	}
+	foo(host)
+}
+
 impl UsbHost {
 	fn globals(&self) -> core::cell::RefMut<UsbGlobals> {
 		self.globals.borrow_mut()
@@ -335,6 +408,8 @@ impl UsbHost {
 				otg_fs_host.hcfg.modify(|_,w| w.fslspcs().bits(1)); // 48MHz
 				otg_fs_host.hcfg.modify(|r, w| w.bits( r.bits() | (1<<2) )); // FSLSS
 			}
+
+			let mut coroutine: Option<CoroutineType> = None;
 			
 			unsafe {
 				loop {
@@ -396,23 +471,24 @@ impl UsbHost {
 					// TODO: notify client that we have a connection
 
 					loop {
-						debugln!("1");
+						coroutine::fyield().await;
 						host.sleep_until(|g| g.usb_global.gintsts.read().bits() != 0).await;
-						debugln!("2");
+
+						if let Some(ref mut future) = coroutine {
+							coroutine::poll( unsafe { Pin::new_unchecked(future) } );
+						}
+
 
 						if host.globals().usb_global.gintsts.read().sof().bit() {
-							debugln!("3");
 							host.globals().usb_global.gintsts.write(|w| w.sof().set_bit());
-							debugln!("4");
 							//write!(tx, "{:8} {:08x}\r", sofcount, host.globals().usb_host.hcchar0.read().bits());
 							let hfnum = host.globals().usb_host.hfnum.read().bits();
 							let gnptxsts = host.globals().usb_global.gnptxsts.read().bits();
-							debug!("{:8} {:08x} {:08x}\r", sofcount, hfnum, gnptxsts);
+							//debug!("{:8} {:08x} {:08x}\r", sofcount, hfnum, gnptxsts);
 							//debugln!("hprt = {:08x}", host.globals().usb_host.hprt.read().bits());
 							//write!(tx, "{:08x}\r", host.globals().usb_global.gintsts.read().bits());
 							sofcount += 1;
 						}
-						debugln!("4");
 
 						let frame_number = host.globals().usb_host.hfnum.read().frnum().bits();
 
@@ -420,21 +496,6 @@ impl UsbHost {
 							debugln!("srqint");
 							host.globals().usb_global.gintsts.write(|w| w.srqint().set_bit());
 							// TODO do things
-						}
-
-						while host.globals().usb_global.gintsts.read().rxflvl().bit() {
-							let rxstsp = host.globals().usb_global.grxstsp_host().read();
-							debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {}", frame_number, rxstsp.chnum().bits(), rxstsp.dpid().bits(), rxstsp.bcnt().bits(), rxstsp.pktsts().bits(),
-								match rxstsp.pktsts().bits() {
-									2 => "IN data packet received",
-									3 => "IN transaction completed",
-									5 => "Data toggle error",
-									7 => "Channel halted",
-									_ => "(unknown)"
-								}
-							);
-							// TODO do things https://github.com/libusbhost/libusbhost/blob/master/src/usbh_lld_stm32f4.c#L322
-							// FIXME remove this. actual things are done in the drivers.
 						}
 
 						// OTGINT
@@ -452,6 +513,13 @@ impl UsbHost {
 							if val.penchng().bit() {
 								debugln!("#{}, penchng, port enabled is {}", frame_number, val.pena().bit());
 
+								if val.pena().bit() {
+									coroutine = Some(handle_device(host));
+								}
+								else {
+									coroutine = None; // TODO clean termination?
+								}
+
 								for i in 0..8 {
 									host.globals().usb_host.hcintx(i).write(|w| w.bits(!0));
 									host.globals().usb_host.hcintmskx(i).write(|w| w
@@ -468,74 +536,8 @@ impl UsbHost {
 								}
 								
 								host.globals().usb_host.haintmsk.write(|w| w.bits(0xFFFF));
-			
-								// ACTUAL DEVICE COMMUNICATION
-								//debugln!("addr in {:?}", result);
-								let setup_packet = [
-									0x00u8, // device, standard, host to device
-									0x05, // set address
-									0x01, 0x00, // address 1
-									0x00, 0x00, // index
-									0x00, 0x00, // length
-								];
-								//host.trigger_pin.borrow().set_high();
-								host.control_out_transfer(&setup_packet, None, 0, 64).await;
-								//host.trigger_pin.borrow().set_low();
-
-								//host.trigger_pin.borrow().set_high();
-								let mut ep0_max_size = 64;
-								if let Ok(descriptor) = host.get_device_descriptor(1).await {
-									//host.trigger_pin.borrow().set_low();
-									ep0_max_size = descriptor[7].into();
-									debugln!("Descriptor: {:02X?}; max packet size on ep0 is {}", descriptor, ep0_max_size);
-								}
-								else {
-									debug!("Descriptor: ERROR");
-								}
-
-
-								let mut blab = [0; 512];
-								let result = host.get_configuration_descriptor(1, &mut blab, ep0_max_size).await;
-								if let Ok(size) = result {
-									debugln!("Config descriptor: {:02X?}", &blab[0..size]);
-
-									let configuration_value = blab[5];
-
-									host.trigger_pin.borrow_mut().set_high();
-									host.set_configuration(1, configuration_value).await;
-
-									parse_midi_config_descriptor(&blab[0..size]);
-								}
-								else {
-									debugln!("Config descriptor: error {:?}", result);
-								}
-
-								let mut data_pid = DataPid::Data0;
-								loop {
-									let mut data = [0; 64];
-									let fnord = UsbInTransaction::new(
-										&mut data,
-										EndpointType::Bulk,
-										1,
-										1,
-										data_pid,
-										64,
-										false,
-										&host.globals
-									);
-
-									let result = fnord.await;
-
-									if let Ok(size) = result {
-										debugln!("received: {:02X?}", &data[0..size]);
-										data_pid = match data_pid {
-											DataPid::Data0 => DataPid::Data1,
-											DataPid::Data1 => DataPid::Data0,
-											_ => unreachable!()
-										};
-									}
-								}
 							}
+								
 
 							if val.pocchng().bit() {
 								debugln!("overcurrent");
@@ -568,21 +570,7 @@ impl UsbHost {
 							debugln!("ipxfr");
 						}
 
-						// HCINT
-						if host.globals().usb_global.gintsts.read().hcint().bit() {
-							//host.trigger_pin.borrow().set_low();
-							let haint = host.globals().usb_host.haint.read().bits();
-							debugln!("#{} hcint (haint = {:08x})", frame_number, haint);
-							for i in 0..8 {
-								if haint & (1 << i) != 0 {
-									debugln!("hcint{} = {:08x}", i, host.globals().usb_host.hcintx(i).read().bits());
-									host.globals().usb_host.hcintx(i).write(|w| w.bits(!0)); // FIXME this is garbage and creates lost updates
-									debugln!("hcchar0 chena = {}", host.globals().usb_host.hcchar0.read().chena().bit());
-								}
-							}
-						}
-
-						//delay.delay_ms(1_u32);
+						// checking for HCINT and RXFLVL is handled by the coroutine(s)
 					}
 				}
 			}
