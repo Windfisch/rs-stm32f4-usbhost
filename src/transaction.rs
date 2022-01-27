@@ -125,7 +125,7 @@ impl Future for UsbInTransaction<'_> {
 	type Output = Result<usize, TransactionError>;
 
 	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<usize, TransactionError>> {
-		let globals = self.globals.borrow_mut();
+		let globals = self.globals.borrow();
 		let usb_host = &globals.usb_host;
 		//let tx = self.globals.tx;
 		match self.state {
@@ -257,7 +257,7 @@ impl Future for UsbOutTransaction<'_> {
 	type Output = Result<(), TransactionError>;
 
 	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-		let globals = self.globals.borrow_mut();
+		let globals = self.globals.borrow();
 		let usb_host = &globals.usb_host;
 		match self.state {
 			TransactionState::WaitingForAvailableChannel => {

@@ -54,7 +54,7 @@ impl Future for SleepUntil<'_> {
 	type Output = ();
 
 	fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-		let globals = self.globals.borrow_mut();
+		let globals = self.globals.borrow();
 		if (self.func)(&*globals) {
 			return Poll::Ready(());
 		}
@@ -271,14 +271,14 @@ use stm32f4xx_hal::gpio;
 use stm32f4xx_hal::gpio::Alternate;
 
 impl UsbHost {
-	fn globals(&self) -> core::cell::Ref<UsbGlobals> {
-		self.globals.borrow()
+	fn globals(&self) -> core::cell::RefMut<UsbGlobals> {
+		self.globals.borrow_mut()
 	}
 
 	pub fn make_coroutine<'a>(&'a self) -> UsbHostCoroutine<'a> {
 		async fn foo(host: &UsbHost) {
 			unsafe {
-				let globals = host.globals.borrow_mut();
+				let globals = host.globals.borrow();
 				let otg_fs_global = &globals.usb_global;
 				let otg_fs_host = &globals.usb_host;
 
@@ -340,19 +340,19 @@ impl UsbHost {
 				loop {
 					// "Host initialization" steps 3-4: enable PPWR and wait for PCDET
 					debugln!("setting PPWR and waiting for PCDET");
-					host.globals.borrow_mut().usb_host.hprt.modify(|_,w| w.ppwr().set_bit()); // FIXME unsure if that's needed
+					host.globals.borrow().usb_host.hprt.modify(|_,w| w.ppwr().set_bit()); // FIXME unsure if that's needed
 					host.sleep_until(|g| g.usb_host.hprt.read().pcdet().bit()).await;
 					debugln!("got PCDET!");
 					
 					// "Host initialization" steps 5-9
 					debugln!("resetting the port and waiting for PENCHNG");
-					host.globals.borrow_mut().usb_host.hprt.modify(|_,w| w.prst().set_bit());
+					host.globals.borrow().usb_host.hprt.modify(|_,w| w.prst().set_bit());
 					host.delay.borrow_mut().delay_ms(15_u32);
-					host.globals.borrow_mut().usb_host.hprt.modify(|_,w| w.prst().clear_bit());
+					host.globals.borrow().usb_host.hprt.modify(|_,w| w.prst().clear_bit());
 					host.delay.borrow_mut().delay_ms(15_u32);
 
 					host.sleep_until(|g| g.usb_host.hprt.read().penchng().bit()).await;
-					debugln!("enumerated speed is {}", host.globals.borrow_mut().usb_host.hprt.read().pspd().bits());
+					debugln!("enumerated speed is {}", host.globals.borrow().usb_host.hprt.read().pspd().bits());
 					
 					// "Host initialization" step 10: program hfir
 					// TODO: is that needed? seems to autoselect a good value
@@ -362,18 +362,18 @@ impl UsbHost {
 					//otg_fs_host.hcfg.modify(|_,w| w.fslspcs().bits(1)); // 48MHz
 
 					// "Host initialization" steps 12-14
-					host.globals.borrow_mut().usb_global.grxfsiz.modify(|_,w| w
+					host.globals.borrow().usb_global.grxfsiz.modify(|_,w| w
 						.rxfd().bits(64) // 64 32bit words RX fifo size
 					);
-					host.globals.borrow_mut().usb_global.hnptxfsiz_mut().modify(|_,w| w
+					host.globals.borrow().usb_global.hnptxfsiz_mut().modify(|_,w| w
 						.nptxfd().bits(64)
 						.nptxfsa().bits(64)
 					);
-					host.globals.borrow_mut().usb_global.hptxfsiz.modify(|_,w| w
+					host.globals.borrow().usb_global.hptxfsiz.modify(|_,w| w
 						.ptxfsiz().bits(64)
 						.ptxsa().bits(64+64)
 					);
-					host.globals.borrow_mut().usb_global.gintmsk.modify(|_,w| w
+					host.globals.borrow().usb_global.gintmsk.modify(|_,w| w
 						.hcim().set_bit()
 						.nptxfem().set_bit()
 					);
@@ -384,28 +384,35 @@ impl UsbHost {
 
 					host.delay.borrow_mut().delay_ms(250_u32);
 
-					host.globals.borrow_mut().usb_global.gintmsk.modify(|_,w| w.hcim().set_bit()); // FIXME delete
-					host.globals.borrow_mut().usb_global.gintsts.modify(|_,w| w.bits(!0));
+					host.globals().usb_global.gintmsk.modify(|_,w| w.hcim().set_bit()); // FIXME delete
+					host.globals().usb_global.gintsts.modify(|_,w| w.bits(!0));
 
 
-					debugln!("gintsts = {:08x}", host.globals.borrow().usb_global.gintsts.read().bits());
-					debugln!("hprt = {:08x}", host.globals.borrow().usb_host.hprt.read().bits());
+					debugln!("gintsts = {:08x}", host.globals().usb_global.gintsts.read().bits());
+					debugln!("hprt = {:08x}", host.globals().usb_host.hprt.read().bits());
 					host.delay.borrow_mut().delay_ms(300_u32);
-					debugln!("hprt = {:08x}", host.globals.borrow().usb_host.hprt.read().bits());
+					debugln!("hprt = {:08x}", host.globals().usb_host.hprt.read().bits());
 					let mut sofcount: u32 = 0;
 					// TODO: notify client that we have a connection
 
 					loop {
+						debugln!("1");
 						host.sleep_until(|g| g.usb_global.gintsts.read().bits() != 0).await;
+						debugln!("2");
 
 						if host.globals().usb_global.gintsts.read().sof().bit() {
+							debugln!("3");
 							host.globals().usb_global.gintsts.write(|w| w.sof().set_bit());
+							debugln!("4");
 							//write!(tx, "{:8} {:08x}\r", sofcount, host.globals().usb_host.hcchar0.read().bits());
-							debug!("{:8} {:08x} {:08x}\r", sofcount, host.globals().usb_host.hfnum.read().bits(), host.globals().usb_global.gnptxsts.read().bits());
+							let hfnum = host.globals().usb_host.hfnum.read().bits();
+							let gnptxsts = host.globals().usb_global.gnptxsts.read().bits();
+							debug!("{:8} {:08x} {:08x}\r", sofcount, hfnum, gnptxsts);
 							//debugln!("hprt = {:08x}", host.globals().usb_host.hprt.read().bits());
 							//write!(tx, "{:08x}\r", host.globals().usb_global.gintsts.read().bits());
 							sofcount += 1;
 						}
+						debugln!("4");
 
 						let frame_number = host.globals().usb_host.hfnum.read().frnum().bits();
 
@@ -471,14 +478,14 @@ impl UsbHost {
 									0x00, 0x00, // index
 									0x00, 0x00, // length
 								];
-								//host.trigger_pin.borrow_mut().set_high();
+								//host.trigger_pin.borrow().set_high();
 								host.control_out_transfer(&setup_packet, None, 0, 64).await;
-								//host.trigger_pin.borrow_mut().set_low();
+								//host.trigger_pin.borrow().set_low();
 
-								//host.trigger_pin.borrow_mut().set_high();
+								//host.trigger_pin.borrow().set_high();
 								let mut ep0_max_size = 64;
 								if let Ok(descriptor) = host.get_device_descriptor(1).await {
-									//host.trigger_pin.borrow_mut().set_low();
+									//host.trigger_pin.borrow().set_low();
 									ep0_max_size = descriptor[7].into();
 									debugln!("Descriptor: {:02X?}; max packet size on ep0 is {}", descriptor, ep0_max_size);
 								}
@@ -563,7 +570,7 @@ impl UsbHost {
 
 						// HCINT
 						if host.globals().usb_global.gintsts.read().hcint().bit() {
-							//host.trigger_pin.borrow_mut().set_low();
+							//host.trigger_pin.borrow().set_low();
 							let haint = host.globals().usb_host.haint.read().bits();
 							debugln!("#{} hcint (haint = {:08x})", frame_number, haint);
 							for i in 0..8 {
