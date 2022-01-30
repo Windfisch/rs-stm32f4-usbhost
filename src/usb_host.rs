@@ -369,7 +369,12 @@ impl UsbHost {
 				*/
 
 				// "Core initialization" step 1
-				otg_fs_global.gahbcfg.modify(|_,w| w.gint().set_bit());
+				otg_fs_global.gahbcfg.modify(|_,w| w
+					//.gint().set_bit()
+					.gint().clear_bit() // FIXME debug only
+					.txfelvl().set_bit()
+					.ptxfelvl().set_bit()
+				);
 				// FIXME rxflvl, txfifo empty level
 				//otg_fs_global.gusbcfg.modify(|_,w| w.physel().set_bit()); // this bit is always 1
 
@@ -450,7 +455,7 @@ impl UsbHost {
 					);
 					host.globals.borrow().usb_global.gintmsk.modify(|_,w| w
 						.hcim().set_bit()
-						.nptxfem().set_bit()
+						//.nptxfem().set_bit() // FIXME somehow this is needed and I don't understand why
 					);
 
 					// "host programming model"/"channel initialization"
