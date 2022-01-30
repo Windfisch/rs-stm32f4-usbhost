@@ -401,7 +401,7 @@ impl UsbHost {
 		//				.prtim().set_bit() // FIXME: "only accessible in host mode", why is this inaccessible then?!
 				);
 				// "Host initialization" step 1
-				otg_fs_global.gintmsk.modify(|r, w| w.bits( r.bits() | (1<<24) )); // PRTIM
+				otg_fs_global.gintmsk.modify(|r, w| w.bits( r.bits() | (1<<24) )); // PRTIM == HPRTINT
 
 
 				// "Host initialization" step 2
