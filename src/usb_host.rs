@@ -344,8 +344,8 @@ fn handle_device(host: &UsbHost) -> CoroutineType {
 }
 
 impl UsbHost {
-	fn globals(&self) -> core::cell::RefMut<UsbGlobals> {
-		self.globals.borrow_mut()
+	fn globals(&self) -> core::cell::Ref<UsbGlobals> {
+		self.globals.borrow()
 	}
 
 	pub fn make_coroutine<'a>(&'a self) -> UsbHostCoroutine<'a> {
