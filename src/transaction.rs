@@ -300,11 +300,24 @@ impl Future for UsbOutTransaction<'_> {
 						// fifo. excess bytes seem to be ignored. i.e., to transmit 6 bytes, AA BB CC DD EE FF, we need
 						// to write 0xAABBCCDD and 0xEEFF4242.
 						
-						// FIXME ensure the fifo has enough space!
-						for chunk in self.data.chunks(4) {
-							let mut tmp = [0; 4];
-							tmp[0..chunk.len()].copy_from_slice(chunk);
-							core::ptr::write_volatile((0x50001000 + (channel as usize) * 0x1000) as *mut [u8; 4], tmp);
+						for packet in self.data.chunks(self.packet_size as usize)
+						{
+							// FIXME ensure the fifo has enough space! move the below into a future!
+							globals.usb_global.gintmsk.modify(|_, w| w.nptxfem().set_bit());
+							loop {
+								let txstatus = globals.usb_global.gnptxsts.read();
+								debugln!("queue entries {}\t words {}, top {}", txstatus.nptqxsav().bits(), txstatus.nptxfsav().bits(), txstatus.nptxqtop().bits()); // TODO FIXME debug the tx fifo occupation here
+								if txstatus.nptqxsav().bits() > 0 && txstatus.nptqxsav().bits() as usize* 4 >= packet.len() {
+									break;
+								}
+							} // FIXME FIXME FIXME do not block in a future
+							globals.usb_global.gintmsk.modify(|_, w| w.nptxfem().clear_bit());
+
+							for chunk in packet.chunks(4) {
+								let mut tmp = [0; 4];
+								tmp[0..chunk.len()].copy_from_slice(chunk);
+								core::ptr::write_volatile((0x50001000 + (channel as usize) * 0x1000) as *mut [u8; 4], tmp);
+							}
 						}
 						//debugln!("gnptxsts = {:08x}, hptxfsiz = {:08x}", otg_fs_global.gnptxsts.read().bits(), otg_fs_global.hptxfsiz.read().bits());
 					}
