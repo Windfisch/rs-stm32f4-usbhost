@@ -473,11 +473,22 @@ impl UsbHost {
 					host.delay.borrow_mut().delay_ms(300_u32);
 					debugln!("hprt = {:08x}", host.globals().usb_host.hprt.read().bits());
 					let mut sofcount: u32 = 0;
-					// TODO: notify client that we have a connection
 
 					loop {
-						coroutine::fyield().await;
-						host.sleep_until(|g| g.usb_global.gintsts.read().bits() != 0).await;
+						coroutine::fyield().await; // FIXME remove once there's no interrupt spamming. or do we?
+
+						let txstatus = host.globals().usb_global.gnptxsts.read();
+						//debugln!("bonk. queue entries {}\t words {}, top {}", txstatus.nptqxsav().bits(), txstatus.nptxfsav().bits(), txstatus.nptxqtop().bits()); // TODO FIXME debug the tx fifo occupation here
+
+						let (gintsts, gintmsk) = (host.globals().usb_global.gintsts.read().bits(), host.globals().usb_global.gintmsk.read().bits());
+						/*debugln!("{:08x} = {:08x} & {:08x}",
+							gintsts & gintmsk,
+							gintsts,
+							gintmsk
+						);*/
+						//debug!("......................................................................\r");
+						host.sleep_until(|g| g.usb_global.gintsts.read().bits() & g.usb_global.gintmsk.read().bits() != 0 || g.grxsts.is_some()).await; // FIXME reenable this once transmit futures can set (N)PTXFEM
+
 
 						if let Some(ref mut future) = coroutine {
 							coroutine::poll( unsafe { Pin::new_unchecked(future) } );
