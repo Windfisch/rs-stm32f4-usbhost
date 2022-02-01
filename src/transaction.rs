@@ -125,20 +125,19 @@ impl Future for UsbInTransaction<'_> {
 	type Output = Result<usize, TransactionError>;
 
 	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<usize, TransactionError>> {
-		let globals = self.globals.borrow();
-		let usb_host = &globals.usb_host;
+		let mut globals = self.globals.borrow_mut();
 		//let tx = self.globals.tx;
 		match self.state {
 			TransactionState::WaitingForAvailableChannel => {
-				let available_channel = (0..8).find(|i| usb_host.hccharx(*i).read().chena().bit_is_clear());
+				let available_channel = (0..8).find(|i| globals.usb_host.hccharx(*i).read().chena().bit_is_clear());
 				if let Some(channel) = available_channel {
 					unsafe {
-						usb_host.hctsizx(channel).write(|w| w
+						globals.usb_host.hctsizx(channel).write(|w| w
 							.dpid().bits(self.data_pid as u8)
 							.pktcnt().bits(div_ceil(self.data.len(), self.packet_size as usize) as u16)
 							.xfrsiz().bits(self.data.len() as u32)
 						);
-						usb_host.hccharx(channel).write(|w| w
+						globals.usb_host.hccharx(channel).write(|w| w
 							.dad().bits(self.device_address)
 							.mcnt().bits(1)
 							.epdir().set_bit()
@@ -154,35 +153,37 @@ impl Future for UsbInTransaction<'_> {
 				}
 			}
 			TransactionState::WaitingForTransactionToFinish(channel) => {
-				if let Some(ref grxsts) = globals.grxsts {
-					if grxsts.chnum().bits() == channel {
-						let packet_status = PacketStatus::from(grxsts.pktsts().bits());
-						//debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {:?}", usb_host.hfnum.read().frnum().bits(), grxsts.chnum().bits(), grxsts.dpid().bits(), grxsts.bcnt().bits(), grxsts.pktsts().bits(), packet_status);
+				// FIXME epnum should be chnum! see https://github.com/Windfisch/rs-stm32f4-usbhost/issues/13
+				if globals.usb_global.gintsts.read().rxflvl().bit() &&  globals.usb_global.grxstsr_host().read().epnum().bits() == channel {
+					let grxsts = globals.usb_global.grxstsp_host().read();
+					assert!(grxsts.chnum() == channel);
+					let packet_status = PacketStatus::from(grxsts.pktsts().bits());
+					//debugln!("#{}: read ch={} dpid={} bcnt={} pktsts={} {:?}", globals.usb_host.hfnum.read().frnum().bits(), grxsts.chnum().bits(), grxsts.dpid().bits(), grxsts.bcnt().bits(), grxsts.pktsts().bits(), packet_status);
 
-						match packet_status {
-							PacketStatus::InDataPacketReceived => {
-								let len = grxsts.bcnt().bits() as usize;
-								for i in (0..len).step_by(4) {
-									let fifo_word = unsafe { core::ptr::read_volatile((0x50001000 + (channel as usize) * 0x1000) as *mut [u8; 4]) };
-									let offset = self.rx_pointer + i;
-									let remaining = usize::min(len - i, 4);
-									self.data[offset..(offset + remaining)].copy_from_slice(&fifo_word[0..remaining]);
-								}
-								self.rx_pointer += len;
-								let packets_remaining = usb_host.hctsizx(channel).read().pktcnt().bits();
-								debugln!("{} / {} ({})", self.rx_pointer, self.data.len(), packets_remaining);
-								if self.rx_pointer < self.data.len() && packets_remaining > 0 {
-									usb_host.hccharx(channel).modify(|_, w| w.chena().set_bit()); // FIXME really?
-								}
-
-								
+					match packet_status {
+						PacketStatus::InDataPacketReceived => {
+							let len = grxsts.bcnt().bits() as usize;
+							debugln!("read {} bytes, pointer {}/{}", len, self.rx_pointer, self.data.len());
+							for i in (0..len).step_by(4) {
+								let fifo_word = unsafe { core::ptr::read_volatile((0x50001000 + (channel as usize) * 0x1000) as *mut [u8; 4]) };
+								let offset = self.rx_pointer + i;
+								let remaining = usize::min(len - i, 4);
+								self.data[offset..(offset + remaining)].copy_from_slice(&fifo_word[0..remaining]);
 							}
-							_ => {}
+							self.rx_pointer += len;
+							let packets_remaining = globals.usb_host.hctsizx(channel).read().pktcnt().bits();
+							debugln!("{} / {} ({})", self.rx_pointer, self.data.len(), packets_remaining);
+							if self.rx_pointer < self.data.len() && packets_remaining > 0 {
+								globals.usb_host.hccharx(channel).modify(|_, w| w.chena().set_bit()); // FIXME really?
+							}
+
+							
 						}
+						_ => {}
 					}
 				}
-				let hcint = usb_host.hcintx(channel).read();
-				usb_host.hcintx(channel).write(|w| unsafe { w.bits(hcint.bits()) } );
+				let hcint = globals.usb_host.hcintx(channel).read();
+				globals.usb_host.hcintx(channel).write(|w| unsafe { w.bits(hcint.bits()) } );
 
 				//debugln!("{:08X}", hcint.bits());
 				
@@ -197,7 +198,7 @@ impl Future for UsbInTransaction<'_> {
 
 				if error.is_some() {
 					//debugln!("Error in IN transaction {:?}, disabling channel", error.unwrap());
-					usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
+					globals.usb_host.hccharx(channel).modify(|_, w| w.chdis().set_bit());
 
 					if self.last_error.is_some() {
 						debugln!("WARNING: multiple errors in IN transaction");
