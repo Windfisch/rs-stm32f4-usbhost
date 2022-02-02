@@ -3,13 +3,35 @@ use core::pin::Pin;
 use core::cell::RefCell;
 use sharing_coroutines_nostd;
 
+
+#[allow(unused_macros)]
+macro_rules! debug {
+	($($arg:tt)*) => {{
+		use core::mem::MaybeUninit;
+		#[allow(unused_unsafe)]
+		let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
+		write!(tx, $($arg)*).ok();
+	}}
+}
+#[allow(unused_macros)]
+macro_rules! debugln {
+	($($arg:tt)*) => {{
+		use core::mem::MaybeUninit;
+		#[allow(unused_unsafe)]
+		let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
+		writeln!(tx, $($arg)*).ok();
+	}}
+}
+
+
+
 pub trait DriverContext {}
 
 pub trait DriverDescriptor {
 	type DriverFutureType : Future<Output = ()>;
 	type DriverContextType : DriverContext;
 
-	fn wants_device(&self) -> bool; // TODO
+	fn wants_device(&self, device_descriptor: &[u8], config_descriptor: &[u8]) -> bool;
 	fn create_instance(&self) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType>;
 }
 
@@ -39,7 +61,54 @@ impl DriverDescriptor for MidiDriverDescriptor {
 	type DriverFutureType = MidiDriverFuture<'static>;
 	type DriverContextType = MidiDriverContext;
 
-	fn wants_device(&self) -> bool { todo!(); }
+	fn wants_device(&self, device_descriptor: &[u8], config_descriptor: &[u8]) -> bool {
+		let mut i = 0;
+		let mut want = false;
+		while i < config_descriptor.len() && i + (config_descriptor[i] as usize) <= config_descriptor.len() {
+			let descr = &config_descriptor[i .. (i+config_descriptor[i] as usize)];
+
+			match descr[1] {
+				0x02 => {
+					debugln!("\n======== Configuration #{} with {} interfaces ========\n", descr[5], descr[4]);
+				}
+				0x04 => {
+					debugln!("\n==== Interface #{} ====", descr[2]);
+				}
+				0x24 => {
+					match descr[2] {
+						0x01 => {
+							debugln!("CS_INTERFACE");
+						}
+						0x02 => { // midi in jack
+							debugln!("midi in jack #{} ({})", descr[4], descr[3]);
+							want = true;
+						}
+						0x03 => { // midi out jack
+							debugln!("midi out jack #{} ({})", descr[4], descr[3]);
+							want = true;
+						}
+						0x04 => { debugln!("element"); }
+						_ => { debugln!("??"); }
+					}
+				}
+				0x05 => {
+					debugln!("endpoint #{:02X}", descr[2]);
+				}
+				0x25 => {
+					debugln!("  endpoint has {} embedded midi jacks", descr[3]);
+					for i in 0..(descr[3] as usize) {
+						debugln!("  {} -> jack {}", i, descr[4+i]);
+					}
+				}
+				_ => { debugln!("?"); }
+
+			}
+
+			i += config_descriptor[i] as usize;
+		}
+
+		return want;
+	}
 	fn create_instance(&self) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType> {
 		let context = MidiDriverContext {
 			send_queue: RefCell::new(heapless::Deque::new()),
