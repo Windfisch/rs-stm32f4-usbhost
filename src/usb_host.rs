@@ -297,17 +297,17 @@ fn handle_device(host: &UsbHost) -> CoroutineType {
 		}
 
 
-		let mut blab = [0; 512];
-		let result = host.get_configuration_descriptor(1, &mut blab, ep0_max_size).await;
+		let mut config_descriptor = [0; 512];
+		let result = host.get_configuration_descriptor(1, &mut config_descriptor, ep0_max_size).await;
 		if let Ok(size) = result {
-			debugln!("Config descriptor: {:02X?}", &blab[0..size]);
+			debugln!("Config descriptor: {:02X?}", &config_descriptor[0..size]);
 
-			let configuration_value = blab[5];
+			let configuration_value = config_descriptor[5];
 
 			host.trigger_pin.borrow_mut().set_high();
 			host.set_configuration(1, configuration_value).await;
 
-			parse_midi_config_descriptor(&blab[0..size]);
+			parse_midi_config_descriptor(&config_descriptor[0..size]);
 		}
 		else {
 			debugln!("Config descriptor: error {:?}", result);
