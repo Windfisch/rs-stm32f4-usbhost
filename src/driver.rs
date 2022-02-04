@@ -4,6 +4,9 @@ use core::cell::RefCell;
 use sharing_coroutines_nostd;
 
 
+use crate::hal::{prelude::*, stm32};
+use crate::hal::serial;
+use core::fmt::Write;
 #[allow(unused_macros)]
 macro_rules! debug {
 	($($arg:tt)*) => {{
