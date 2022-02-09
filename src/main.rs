@@ -10,6 +10,7 @@ mod usb_host;
 mod driver;
 mod transaction;
 mod host_ext;
+mod print;
 
 use core::future::Future;
 pub(crate) use core::pin::Pin;

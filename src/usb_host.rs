@@ -1,9 +1,8 @@
+use crate::print::{debug, debugln};
+
 use core::future::Future;
 pub(crate) use core::pin::Pin;
 use core::cell::RefCell;
-
-use crate::hal::serial;
-use core::fmt::Write;
 
 use crate::hal::{prelude::*, stm32};
 
@@ -16,26 +15,6 @@ use crate::host_ext::OtgFsHostExt;
 
 
 use crate::transaction::*;
-
-#[allow(unused_macros)]
-macro_rules! debug {
-	($($arg:tt)*) => {{
-		use core::mem::MaybeUninit;
-		#[allow(unused_unsafe)]
-		let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
-		write!(tx, $($arg)*).ok();
-	}}
-}
-#[allow(unused_macros)]
-macro_rules! debugln {
-	($($arg:tt)*) => {{
-		use core::mem::MaybeUninit;
-		#[allow(unused_unsafe)]
-		let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
-		writeln!(tx, $($arg)*).ok();
-	}}
-}
-
 
 use stm32f4xx_hal::gpio::{Output, PushPull};
 

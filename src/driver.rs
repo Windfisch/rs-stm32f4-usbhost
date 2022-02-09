@@ -1,3 +1,4 @@
+use crate::print::{debug, debugln};
 use core::future::Future;
 use core::pin::Pin;
 use core::cell::RefCell;
@@ -5,27 +6,6 @@ use sharing_coroutines_nostd;
 
 
 use crate::hal::{prelude::*, stm32};
-use crate::hal::serial;
-use core::fmt::Write;
-#[allow(unused_macros)]
-macro_rules! debug {
-	($($arg:tt)*) => {{
-		use core::mem::MaybeUninit;
-		#[allow(unused_unsafe)]
-		let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
-		write!(tx, $($arg)*).ok();
-	}}
-}
-#[allow(unused_macros)]
-macro_rules! debugln {
-	($($arg:tt)*) => {{
-		use core::mem::MaybeUninit;
-		#[allow(unused_unsafe)]
-		let mut tx: serial::Tx<stm32::USART1> = unsafe { MaybeUninit::uninit().assume_init() };
-		writeln!(tx, $($arg)*).ok();
-	}}
-}
-
 
 
 pub trait DriverContext {}
