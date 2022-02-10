@@ -17,7 +17,7 @@ stm32f4 = "0.13"
 heapless = "0.7"
 lazy_static = {version = "1.4.0", features=["spin_no_std"]}
 
-sharing-coroutines-nostd = { path = "/home/flo/rust/coroutine" }
+sharing-coroutines-nostd = { git = "https://github.com/Windfisch/sharing-coroutines-nostd", rev = "205ac922ed33c2c15f09898fd222064ee20a3685" }
 
 [dependencies.stm32f4xx-hal]
 version = "0.10"
