@@ -1,0 +1,23 @@
+name: build
+
+env:
+  CARGO_TERM_COLOR: always
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Compile
+    runs-on: ubuntu-latest
+    steps:
+      - run: sudo apt-get install binutils-arm-none-eabi
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly-2022-02-10
+          override: true
+          target: thumbv7m-none-eabi
+      - run: cargo build --release
+      - run: arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/release/blinky blinky.bin
+      - run: curl --header "Authorization: Token $SERIESCI_TOKEN" --header "Content-Type: application/json" --data "{\"value\":\"$(stat --format %s blinky.bin) bytes\",\"sha\":\"${GITHUB_SHA}\"}" https://seriesci.com/api/Windfisch/rs-stm32f4-usbhost/binary_size/one
