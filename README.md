@@ -1,13 +1,11 @@
 # Rust STM32F4 / Synopsis usbhost
 
-I am building a crate to support the USB host feature of the Synopsis-OTG peripherals
-that can be found in STM32F4, GD32VF103 and lots of other microcontrollers.
+I am building a crate to support the **USB host** feature of the **Synopsis-OTG** peripherals
+that can be found in STM32F4, GD32VF103 and lots of other microcontrollers. Also, I am creating
+a **USB driver abstraction** that fixes some of the shortcomings of [usb-host](https://crates.io/crates/usb-host).
 
 [A usb-device implementation](https://crates.io/crates/synopsys-usb-otg) already exists,
-but only allows to use the chip as a usb device.
-
-This may or may not support [usb-host](https://crates.io/crates/usb-host) some day,
-or I may send patches for usb-host if required. We will see.
+but only allows to use the chip as a usb device, not host.
 
 ## Current status
 
