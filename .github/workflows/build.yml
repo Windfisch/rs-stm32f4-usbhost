@@ -20,4 +20,8 @@ jobs:
           target: thumbv7m-none-eabi
       - run: cargo build --release
       - run: arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/release/blinky blinky.bin
-      - run: curl --header "Authorization: Token $SERIESCI_TOKEN" --header "Content-Type: application/json" --data "{\"value\":\"$(stat --format %s blinky.bin) bytes\",\"sha\":\"${GITHUB_SHA}\"}" https://seriesci.com/api/Windfisch/rs-stm32f4-usbhost/binary_size/one
+      - name: Upload binary_size to seriesci
+        env:
+          SERIESCI_TOKEN: ${{ secrets.SERIESCI_TOKEN }}
+        run: |
+          curl --header "Authorization: Token $SERIESCI_TOKEN" --header "Content-Type: application/json" --data "{\"value\":\"$(stat --format %s blinky.bin) bytes\",\"sha\":\"${GITHUB_SHA}\"}" https://seriesci.com/api/Windfisch/rs-stm32f4-usbhost/binary_size/one
