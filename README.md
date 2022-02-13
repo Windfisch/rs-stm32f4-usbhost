@@ -1,5 +1,8 @@
 # Rust STM32F4 / Synopsis usbhost
 
+[![build](https://github.com/Windfisch/rs-stm32f4-usbhost/actions/workflows/build.yml/badge.svg)](https://github.com/Windfisch/rs-stm32f4-usbhost/actions/workflows/build.yml)
+[![Series Badge](https://seriesci.com/Windfisch/rs-stm32f4-usbhost/series/master/binary_size.svg)](https://seriesci.com/Windfisch/rs-stm32f4-usbhost/series/master/binary_size)
+
 I am building a crate to support the **USB host** feature of the **Synopsis-OTG** peripherals
 that can be found in STM32F4, GD32VF103 and lots of other microcontrollers. Also, I am creating
 a **USB driver abstraction** that fixes some of the shortcomings of [usb-host](https://crates.io/crates/usb-host).
