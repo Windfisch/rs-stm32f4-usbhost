@@ -17,7 +17,7 @@ jobs:
           profile: minimal
           toolchain: nightly-2022-02-10
           override: true
-          target: thumbv7m-none-eabi
+          target: thumbv7em-none-eabihf
       - run: cargo build --release
       - run: arm-none-eabi-objcopy -O binary target/thumbv7em-none-eabihf/release/blinky blinky.bin
       - name: Upload binary_size to seriesci
