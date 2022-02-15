@@ -1,11 +1,8 @@
-use crate::print::{debug, debugln};
+use crate::print::debugln;
 use core::future::Future;
 use core::pin::Pin;
 use core::cell::RefCell;
 use sharing_coroutines_nostd;
-
-
-use crate::hal::{prelude::*, stm32};
 
 
 pub trait DriverContext {}

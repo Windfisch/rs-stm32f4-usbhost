@@ -1,10 +1,7 @@
-use crate::print::{debug, debugln};
+use crate::print::debugln;
 use core::future::Future;
 use core::pin::Pin;
 use core::cell::RefCell;
-
-use core::fmt::Write;
-
 
 use core::task::{Poll, Context};
 
@@ -106,8 +103,7 @@ impl Future for UsbInTransaction<'_> {
 	type Output = Result<usize, TransactionError>;
 
 	fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<usize, TransactionError>> {
-		let mut globals = self.globals.borrow_mut();
-		//let tx = self.globals.tx;
+		let globals = self.globals.borrow_mut();
 		match self.state {
 			TransactionState::WaitingForAvailableChannel => {
 				let available_channel = (0..8).find(|i| globals.usb_host.hccharx(*i).read().chena().bit_is_clear());

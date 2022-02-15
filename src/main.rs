@@ -2,8 +2,7 @@
 #![no_std]
 
 #![feature(type_alias_impl_trait)]
-#![feature(pin_static_ref)]
-#![feature(generators, generator_trait)]
+//#![feature(pin_static_ref)]
 
 mod coroutine;
 mod usb_host;
@@ -12,9 +11,7 @@ mod transaction;
 mod host_ext;
 mod print;
 
-use core::future::Future;
 pub(crate) use core::pin::Pin;
-use core::cell::RefCell;
 
 use cortex_m;
 use cortex_m_rt::entry;
@@ -24,7 +21,6 @@ use core::fmt::Write;
 
 use crate::hal::{prelude::*, stm32};
 
-use core::task::{Poll, Context};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -37,13 +33,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 	loop {}
 }
-
-
-use usb_host::{UsbHost, UsbHostCoroutine};
-
-static mut USB_HOST: Option<UsbHost> = None;
-static mut USB_HOST_COROUTINE: Option<UsbHostCoroutine> = None;
-
 
 #[entry]
 fn main() -> ! {
