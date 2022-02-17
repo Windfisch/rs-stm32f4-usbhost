@@ -370,7 +370,7 @@ checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 [[package]]
 name = "sharing-coroutines-nostd"
 version = "0.1.0"
-source = "git+https://github.com/Windfisch/sharing-coroutines-nostd?rev=683f45165abd504b1c85a4e34dfe7f43c860fcf7#683f45165abd504b1c85a4e34dfe7f43c860fcf7"
+source = "git+https://github.com/Windfisch/sharing-coroutines-nostd?rev=e559d9a719f77f36e17d987946d4d00015586e93#e559d9a719f77f36e17d987946d4d00015586e93"
 
 [[package]]
 name = "spin"

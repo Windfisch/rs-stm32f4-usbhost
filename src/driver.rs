@@ -17,11 +17,35 @@ pub trait DriverDescriptor {
 
 pub trait DriverInstance {
 	fn poll(self: Pin<&Self>);
+	fn wants_device(&self, device_descriptor: &[u8], config_descriptor: &[u8]) -> bool;
+	fn attach(self: Pin<&Self>, device_id: u8) -> Result<(), ()>;
+	fn detach(self: Pin<&Self>);
 }
 
 impl <F: Future<Output = ()>, C: DriverContext> DriverInstance for sharing_coroutines_nostd::FutureContainer<C, F> {
 	fn poll(self: Pin<&Self>) {
-		self.poll()
+		if self.is_init() {
+			self.poll();
+		}
+	}
+
+	fn wants_device(&self, device_descriptor: &[u8], config_descriptor: &[u8]) -> bool {
+		return self.is_init() && midi_wants_device(device_descriptor, config_descriptor);
+	}
+	
+	fn attach(self: Pin<&Self>, device_id: u8) -> Result<(), ()> {
+		if !self.is_init() {
+			// TODO FIXME
+			self.init();
+			return Ok(());
+		}
+		else {
+			return Err(());
+		}
+	}
+
+	fn detach(self: Pin<&Self>) {
+		self.clear();
 	}
 }
 
@@ -34,6 +58,54 @@ impl DriverContext for MidiDriverContext {}
 pub type MidiDriverFuture<'a> = impl Future<Output = ()> + 'a;
 
 
+fn midi_wants_device(device_descriptor: &[u8], config_descriptor: &[u8]) -> bool {
+	let mut i = 0;
+	let mut want = false;
+	while i < config_descriptor.len() && i + (config_descriptor[i] as usize) <= config_descriptor.len() {
+		let descr = &config_descriptor[i .. (i+config_descriptor[i] as usize)];
+
+		match descr[1] {
+			0x02 => {
+				debugln!("\n======== Configuration #{} with {} interfaces ========\n", descr[5], descr[4]);
+			}
+			0x04 => {
+				debugln!("\n==== Interface #{} ====", descr[2]);
+			}
+			0x24 => {
+				match descr[2] {
+					0x01 => {
+						debugln!("CS_INTERFACE");
+					}
+					0x02 => { // midi in jack
+						debugln!("midi in jack #{} ({})", descr[4], descr[3]);
+						want = true;
+					}
+					0x03 => { // midi out jack
+						debugln!("midi out jack #{} ({})", descr[4], descr[3]);
+						want = true;
+					}
+					0x04 => { debugln!("element"); }
+					_ => { debugln!("??"); }
+				}
+			}
+			0x05 => {
+				debugln!("endpoint #{:02X}", descr[2]);
+			}
+			0x25 => {
+				debugln!("  endpoint has {} embedded midi jacks", descr[3]);
+				for i in 0..(descr[3] as usize) {
+					debugln!("  {} -> jack {}", i, descr[4+i]);
+				}
+			}
+			_ => { debugln!("?"); }
+
+		}
+
+		i += config_descriptor[i] as usize;
+	}
+
+	return want;
+}
 
 pub struct MidiDriverDescriptor {}
 
@@ -42,53 +114,9 @@ impl DriverDescriptor for MidiDriverDescriptor {
 	type DriverContextType = MidiDriverContext;
 
 	fn wants_device(&self, device_descriptor: &[u8], config_descriptor: &[u8]) -> bool {
-		let mut i = 0;
-		let mut want = false;
-		while i < config_descriptor.len() && i + (config_descriptor[i] as usize) <= config_descriptor.len() {
-			let descr = &config_descriptor[i .. (i+config_descriptor[i] as usize)];
-
-			match descr[1] {
-				0x02 => {
-					debugln!("\n======== Configuration #{} with {} interfaces ========\n", descr[5], descr[4]);
-				}
-				0x04 => {
-					debugln!("\n==== Interface #{} ====", descr[2]);
-				}
-				0x24 => {
-					match descr[2] {
-						0x01 => {
-							debugln!("CS_INTERFACE");
-						}
-						0x02 => { // midi in jack
-							debugln!("midi in jack #{} ({})", descr[4], descr[3]);
-							want = true;
-						}
-						0x03 => { // midi out jack
-							debugln!("midi out jack #{} ({})", descr[4], descr[3]);
-							want = true;
-						}
-						0x04 => { debugln!("element"); }
-						_ => { debugln!("??"); }
-					}
-				}
-				0x05 => {
-					debugln!("endpoint #{:02X}", descr[2]);
-				}
-				0x25 => {
-					debugln!("  endpoint has {} embedded midi jacks", descr[3]);
-					for i in 0..(descr[3] as usize) {
-						debugln!("  {} -> jack {}", i, descr[4+i]);
-					}
-				}
-				_ => { debugln!("?"); }
-
-			}
-
-			i += config_descriptor[i] as usize;
-		}
-
-		return want;
+		midi_wants_device(device_descriptor, config_descriptor)
 	}
+
 	fn create_instance(&self) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType> {
 		let context = MidiDriverContext {
 			send_queue: RefCell::new(heapless::Deque::new()),
