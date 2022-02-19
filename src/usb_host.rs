@@ -50,6 +50,40 @@ pub struct UsbHost {
 	trigger_pin: RefCell<stm32f4xx_hal::gpio::Pin<Output<PushPull>, 'A', 0>>
 }
 
+pub struct BulkInEndpoint<'a> {
+	device_address: u8,
+	endpoint_number: u8,
+	data_pid: DataPid,
+	host: &'a UsbHost
+}
+
+impl BulkInEndpoint<'_> {
+	pub async fn bulk_in_transfer(&mut self, data: &mut [u8]) -> Result<usize, TransactionError> {
+		let fnord = UsbInTransaction::new(
+			data,
+			EndpointType::Bulk,
+			self.endpoint_number,
+			self.device_address,
+			self.data_pid,
+			64,
+			false,
+			&self.host.globals
+		);
+
+		let result = fnord.await;
+
+		if result.is_ok() {
+			self.data_pid = match self.data_pid {
+				DataPid::Data0 => DataPid::Data1,
+				DataPid::Data1 => DataPid::Data0,
+				_ => unreachable!()
+			};
+		}
+
+		result
+	}
+}
+
 impl UsbHost {
 	fn sleep_until(&self, func: fn(&UsbGlobals) -> bool) -> impl Future<Output=()> + '_ {
 		SleepUntil {
@@ -57,6 +91,16 @@ impl UsbHost {
 			func
 		}
 	}
+
+	pub fn bulk_in_endpoint(&self, device_address: u8, endpoint_number: u8) -> BulkInEndpoint {
+		BulkInEndpoint {
+			device_address,
+			endpoint_number,
+			data_pid: DataPid::Data0,
+			host: self
+		}
+	}
+
 	pub async fn control_out_transfer(&self, request: &[u8], data: Option<&mut [u8]>, device_address: u8, packet_size: u16) {
 		// setup stage
 		loop {
