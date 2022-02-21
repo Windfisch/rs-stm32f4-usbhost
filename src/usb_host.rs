@@ -4,7 +4,7 @@ use core::future::Future;
 pub(crate) use core::pin::Pin;
 use core::cell::RefCell;
 
-use crate::hal::{prelude::*, stm32};
+use crate::hal::prelude::*;
 
 use core::task::{Poll, Context};
 
@@ -295,30 +295,27 @@ use stm32f4xx_hal::gpio::Alternate;
 type CoroutineType<'a> = impl Future<Output=()>;
 fn handle_device(host: &UsbHost) -> CoroutineType {
 	async fn foo(host: &UsbHost) {
+		let address = 1;
+
 		// ACTUAL DEVICE COMMUNICATION
 		//debugln!("addr in {:?}", result);
 		let setup_packet = [
 			0x00u8, // device, standard, host to device
 			0x05, // set address
-			0x01, 0x00, // address 1
+			address, 0x00,
 			0x00, 0x00, // index
 			0x00, 0x00, // length
 		];
-		//host.trigger_pin.borrow().set_high();
 		host.control_out_transfer(&setup_packet, None, 0, 64).await;
-		//host.trigger_pin.borrow().set_low();
 
-		//host.trigger_pin.borrow().set_high();
 		let mut ep0_max_size = 64;
 		if let Ok(descriptor) = host.get_device_descriptor(1).await {
-			//host.trigger_pin.borrow().set_low();
 			ep0_max_size = descriptor[7].into();
 			debugln!("Descriptor: {:02X?}; max packet size on ep0 is {}", descriptor, ep0_max_size);
 		}
 		else {
 			debug!("Descriptor: ERROR");
 		}
-
 
 		let mut config_descriptor = [0; 512];
 		let result = host.get_configuration_descriptor(1, &mut config_descriptor, ep0_max_size).await;
@@ -494,7 +491,6 @@ impl UsbHost {
 					debugln!("hprt = {:08x}", host.globals().usb_host.hprt.read().bits());
 					let mut sofcount: u32 = 0;
 
-					let mut i=0;
 					loop {
 						//host.sleep_until(|g| g.usb_global.gintsts.read().bits() & g.usb_global.gintmsk.read().bits() != 0).await; // FIXME reenable this once transmit futures can set (N)PTXFEM
 
