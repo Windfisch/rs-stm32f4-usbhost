@@ -3,6 +3,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::cell::RefCell;
 use sharing_coroutines_nostd;
+use crate::usb_host::UsbHost;
 
 
 pub trait DriverContext {}
@@ -12,7 +13,7 @@ pub trait DriverDescriptor {
 	type DriverContextType : DriverContext;
 
 	fn wants_device(&self, device_descriptor: &[u8], config_descriptor: &[u8]) -> bool;
-	fn create_instance(&self) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType>;
+	fn create_instance(&self, host: &'static UsbHost) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType>;
 }
 
 pub trait DriverInstance {
@@ -49,11 +50,12 @@ impl <F: Future<Output = ()>, C: DriverContext> DriverInstance for sharing_corou
 	}
 }
 
-pub struct MidiDriverContext {
+pub struct MidiDriverContext<'a> {
 	send_queue: RefCell<heapless::Deque<[u8;4], 64>>,
 	recv_queue: RefCell<heapless::Deque<[u8;4], 64>>,
+	host: &'a UsbHost
 }
-impl DriverContext for MidiDriverContext {}
+impl DriverContext for MidiDriverContext<'_> {}
 
 pub type MidiDriverFuture<'a> = impl Future<Output = ()> + 'a;
 
@@ -107,27 +109,32 @@ fn midi_wants_device(device_descriptor: &[u8], config_descriptor: &[u8]) -> bool
 	return want;
 }
 
+pub fn create_midi_instance<'a>(host: &'a UsbHost) -> sharing_coroutines_nostd::FutureContainer<MidiDriverContext<'a>, MidiDriverFuture<'a>> {
+	let context = MidiDriverContext {
+		send_queue: RefCell::new(heapless::Deque::new()),
+		recv_queue: RefCell::new(heapless::Deque::new()),
+		host
+	};
+
+	unsafe { sharing_coroutines_nostd::FutureContainer::new(context, make_midi_driver_future) }
+}
+
 pub struct MidiDriverDescriptor {}
 
 impl DriverDescriptor for MidiDriverDescriptor {
 	type DriverFutureType = MidiDriverFuture<'static>;
-	type DriverContextType = MidiDriverContext;
+	type DriverContextType = MidiDriverContext<'static>;
 
 	fn wants_device(&self, device_descriptor: &[u8], config_descriptor: &[u8]) -> bool {
 		midi_wants_device(device_descriptor, config_descriptor)
 	}
 
-	fn create_instance(&self) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType> {
-		let context = MidiDriverContext {
-			send_queue: RefCell::new(heapless::Deque::new()),
-			recv_queue: RefCell::new(heapless::Deque::new())
-		};
-
-		unsafe { sharing_coroutines_nostd::FutureContainer::new(context, make_midi_driver_future) }
+	fn create_instance(&self, host: &'static UsbHost) -> sharing_coroutines_nostd::FutureContainer<Self::DriverContextType, Self::DriverFutureType> {
+		create_midi_instance(host)
 	}
 }
 
-impl MidiDriverContext {
+impl MidiDriverContext<'_> {
 	pub fn send(&self, message: [u8; 4]) -> Result<(), [u8; 4]> {
 		self.send_queue.borrow_mut().push_back(message)
 	}
@@ -137,9 +144,17 @@ impl MidiDriverContext {
 	}
 }
 
-fn make_midi_driver_future(data: &MidiDriverContext) -> MidiDriverFuture {
-	async fn make(data: &MidiDriverContext) {
-		todo!();
+fn make_midi_driver_future<'a>(data: &'a MidiDriverContext<'a>) -> MidiDriverFuture<'a> {
+	async fn make<'a>(ctx: &'a MidiDriverContext<'a>) {
+		let mut endpoint = ctx.host.bulk_in_endpoint(1, 1);
+		loop {
+			let mut data = [0; 64];
+			let result = endpoint.bulk_in_transfer(&mut data).await;
+
+			if let Ok(size) = result {
+				debugln!("received: {:02X?}", &data[0..size]);
+			}
+		}
 	}
 	make(data)
 }

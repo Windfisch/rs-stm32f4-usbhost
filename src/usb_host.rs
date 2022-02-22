@@ -327,37 +327,12 @@ fn handle_device(host: &UsbHost) -> CoroutineType {
 			host.trigger_pin.borrow_mut().set_high();
 			host.set_configuration(1, configuration_value).await;
 
-			parse_midi_config_descriptor(&config_descriptor[0..size]);
+			// TODO find the correct driver.
 		}
 		else {
 			debugln!("Config descriptor: error {:?}", result);
 		}
-
-		let mut data_pid = DataPid::Data0;
-		loop {
-			let mut data = [0; 64];
-			let fnord = UsbInTransaction::new(
-				&mut data,
-				EndpointType::Bulk,
-				1,
-				1,
-				data_pid,
-				64,
-				false,
-				&host.globals
-			);
-
-			let result = fnord.await;
-
-			if let Ok(size) = result {
-				debugln!("received: {:02X?}", &data[0..size]);
-				data_pid = match data_pid {
-					DataPid::Data0 => DataPid::Data1,
-					DataPid::Data1 => DataPid::Data0,
-					_ => unreachable!()
-				};
-			}
-		}
+		// TODO call the driver coroutine here
 	}
 	foo(host)
 }
